@@ -101,7 +101,7 @@ bot.on('message', (msg) => {
 
     // Handle unknown commands
     if (messageText?.startsWith('/')) {
-        bot.sendMessage(chatId, '❓ Неизвестная команда. Используй /help для списка доступных команд.');
+        bot.sendMessage(chatId, ' Неизвестная команда. Используй /help для списка доступных команд.');
         return;
     }
 });
@@ -112,28 +112,30 @@ async function startTournament(chatId: number, initiator: TelegramBot.User | und
     
     // Check if there's already an active tournament
     if (activeTournaments.has(chatId)) {
-        bot.sendMessage(chatId, '⚠️ В этом чате уже идет турнир! Дождитесь его завершения.');
+        bot.sendMessage(chatId, ' В этом чате уже идет турнир! Дождитесь его завершения.');
         return;
     }
 
     const initiatorName = initiator.username ? `@${initiator.username}` : (initiator.first_name || 'Неизвестный');
     
-    let tournamentMessage = `🏆 ТУРНИР НАЧАЛСЯ! 🏆\n\nИнициатор: ${initiatorName}`;
+    let tournamentMessage = ` ТУРНИР НАЧАЛСЯ! \n\nИнициатор: ${initiatorName}`;
     
     if (startTime) {
-        tournamentMessage += `\n⏰ Время начала: ${startTime}`;
+        tournamentMessage += `\n Время начала: ${startTime}`;
     }
     
-    tournamentMessage += `\n\n👥 Участники:\n_Пока никого нет_\n\n🎯 Нажмите кнопку ниже, чтобы присоединиться!`;
+    tournamentMessage += `\n\n Участники:\n_Пока никого нет_\n\n Нажмите кнопку ниже, чтобы присоединиться!`;
     
+    // Create universal keyboard - all users see all buttons, validation in handlers
     const keyboard = {
         inline_keyboard: [
             [
-                { text: '🎮 Участвую!', callback_data: 'join_tournament' }
+                { text: ' Участвую!', callback_data: 'join_tournament' },
+                { text: ' Выйти', callback_data: 'leave_tournament' }
             ],
             [
-                { text: '🎲 Начать игру', callback_data: 'start_game' },
-                { text: '🚫 Отменить турнир', callback_data: 'cancel_tournament' }
+                { text: ' Начать игру', callback_data: 'start_game' },
+                { text: ' Отменить турнир', callback_data: 'cancel_tournament' }
             ]
         ]
     };
@@ -155,7 +157,7 @@ async function startTournament(chatId: number, initiator: TelegramBot.User | und
             startTime: startTime
         });
 
-        // Don't update message immediately - let users see the initial state
+        // Don't update message immediately - organizer should see join button first
 
         console.log(`Tournament started in chat ${chatId} by ${initiatorName}`);
     } catch (error) {
@@ -244,13 +246,12 @@ async function updateTournamentMessage(chatId: number, userId?: number) {
     const buttons = [];
     
     if (tournament.gameState === 'registration') {
-        // Show both join and leave buttons - users will see appropriate responses
+        // Always show all buttons - validation happens in callback handlers
         buttons.push([
             { text: '🎮 Участвую!', callback_data: 'join_tournament' },
             { text: '❌ Выйти', callback_data: 'leave_tournament' }
         ]);
         
-        // Show organizer controls
         buttons.push([
             { text: '🎲 Начать игру', callback_data: 'start_game' },
             { text: '🚫 Отменить турнир', callback_data: 'cancel_tournament' }
@@ -310,7 +311,7 @@ bot.on('callback_query', async (callbackQuery) => {
             tournament.participants.add(userId);
             tournament.participantNames.set(userId, userName);
             
-            await updateTournamentMessage(chatId, userId);
+            await updateTournamentMessage(chatId);
             await bot.answerCallbackQuery(callbackQuery.id, { text: 'Вы присоединились к турниру!' });
             
             console.log(`${userName} joined tournament in chat ${chatId}`);
@@ -324,6 +325,7 @@ bot.on('callback_query', async (callbackQuery) => {
                 return;
             }
             await handleLeaveTournament(chatId, userId, userName);
+            await updateTournamentMessage(chatId);
             await bot.answerCallbackQuery(callbackQuery.id, { text: 'Вы вышли из турнира!' });
         } else if (data === 'cancel_tournament') {
             const tournament = activeTournaments.get(chatId);
@@ -683,9 +685,6 @@ async function handleDiceThrow(chatId: number, userId: number, userName: string)
         try {
             // Get the dice value from the message
             const roll = diceMessage.dice?.value || Math.floor(Math.random() * 6) + 1;
-            
-            // Announce the result
-            await bot.sendMessage(chatId, `🎯 ${userName} выбросил: ${roll}`);
             
             // Store roll result
             if (currentMatch.player1.id === userId) {
