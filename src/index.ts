@@ -164,29 +164,50 @@ async function updateTournamentMessage(chatId: number, userId?: number) {
         ? Array.from(tournament.participantNames.values()).map((name, index) => `${index + 1}. ${name}`).join('\n')
         : '_Пока никого нет_';
 
-    const updatedMessage = `🏆 **ТУРНИР** 🏆\n\n👑 **Организатор:** ${tournament.organizerName}\n\n👥 **Участники (${tournament.participants.size}):**\n${participantsList}\n\n🎯 Нажмите кнопку ниже, чтобы присоединиться или выйти!`;
+    let updatedMessage = `🏆 **ТУРНИР** 🏆\n\n👑 **Организатор:** ${tournament.organizerName}\n\n👥 **Участники (${tournament.participants.size}):**\n${participantsList}`;
     
-    // Create dynamic keyboard based on user participation
-    const buttons = [];
-    
-    // Create first row based on participation status
-    const firstRow = [];
-    
-    if (userId && tournament.participants.has(userId)) {
-        // User is participant - show only leave button
-        firstRow.push({ text: '❌ Выйти', callback_data: 'leave_tournament' });
+    // Add tournament bracket if game is in progress
+    if (tournament.gameState === 'playing' && tournament.bracket) {
+        updatedMessage += '\n\n' + getBracketText(tournament);
     } else {
-        // User is not participant - show only join button
-        firstRow.push({ text: '🎮 Участвую!', callback_data: 'join_tournament' });
+        updatedMessage += '\n\n🎯 Нажмите кнопку ниже, чтобы присоединиться или выйти!';
     }
     
-    buttons.push(firstRow);
+    // Create dynamic keyboard based on game state and user participation
+    const buttons = [];
     
-    // Second row with game controls
-    buttons.push([
-        { text: '🎲 Начать игру', callback_data: 'start_game' },
-        { text: '🚫 Отменить турнир', callback_data: 'cancel_tournament' }
-    ]);
+    if (tournament.gameState === 'registration') {
+        // Registration phase - show join/leave and start buttons
+        const firstRow = [];
+        
+        if (userId && tournament.participants.has(userId)) {
+            // User is participant - show only leave button
+            firstRow.push({ text: '❌ Выйти', callback_data: 'leave_tournament' });
+        } else {
+            // User is not participant - show only join button
+            firstRow.push({ text: '🎮 Участвую!', callback_data: 'join_tournament' });
+        }
+        
+        buttons.push(firstRow);
+        
+        // Second row with game controls
+        buttons.push([
+            { text: '🎲 Начать игру', callback_data: 'start_game' },
+            { text: '🚫 Отменить турнир', callback_data: 'cancel_tournament' }
+        ]);
+    } else if (tournament.gameState === 'playing') {
+        // Game in progress - only show dice button for current players
+        const currentRound = tournament.bracket!.rounds[tournament.currentRound!];
+        const currentMatch = currentRound.matches[tournament.currentMatch!];
+        
+        if (userId && (currentMatch.player1.id === userId || (currentMatch.player2 && currentMatch.player2.id === userId))) {
+            // Current player can throw dice
+            buttons.push([{ text: '🎲 Кинуть кубик', callback_data: 'throw_dice' }]);
+        }
+        
+        // Always show cancel button
+        buttons.push([{ text: '🚫 Отменить турнир', callback_data: 'cancel_tournament' }]);
+    }
     
     const keyboard = {
         inline_keyboard: buttons
@@ -405,6 +426,44 @@ function createTournamentBracket(participants: Map<number, string>): TournamentB
     return { rounds, totalRounds, byePlayer: byePlayer || undefined, byeRound };
 }
 
+// Function to get bracket text for display
+function getBracketText(tournament: Tournament): string {
+    if (!tournament.bracket) return '';
+    
+    let bracketText = '🏆 **ТУРНИРНАЯ СЕТКА** 🏆\n\n';
+    
+    // Show bye player if exists
+    if (tournament.bracket.byePlayer && tournament.bracket.byeRound !== undefined) {
+        bracketText += `🎯 **${tournament.bracket.byePlayer.name}** присоединится в раунде ${tournament.bracket.byeRound + 1}\n\n`;
+    }
+    
+    tournament.bracket.rounds.forEach((round, roundIndex) => {
+        bracketText += `**Раунд ${roundIndex + 1}:**\n`;
+        round.matches.forEach((match, matchIndex) => {
+            const status = match.completed ? '✅' : '⏳';
+            
+            if (match.player1.name === 'TBD' || (match.player2 && match.player2.name === 'TBD')) {
+                bracketText += `${status} Ожидание участников\n`;
+            } else if (!match.player2) {
+                bracketText += `${status} ${match.player1.name} (одиночный)`;
+                if (match.winner) {
+                    bracketText += ` → **${match.winner.name}**`;
+                }
+                bracketText += '\n';
+            } else {
+                bracketText += `${status} ${match.player1.name} vs ${match.player2.name}`;
+                if (match.winner) {
+                    bracketText += ` → **${match.winner.name}**`;
+                }
+                bracketText += '\n';
+            }
+        });
+        bracketText += '\n';
+    });
+    
+    return bracketText;
+}
+
 // Function to start tournament bracket
 async function startTournamentBracket(chatId: number) {
     const tournament = activeTournaments.get(chatId);
@@ -416,8 +475,8 @@ async function startTournamentBracket(chatId: number) {
     tournament.currentMatch = 0;
     tournament.gameState = 'playing';
 
-    // Show bracket and start first match
-    await showTournamentBracket(chatId);
+    // Update main message with bracket and start first match
+    await updateTournamentMessage(chatId);
     await startNextMatch(chatId);
 }
 
@@ -609,6 +668,9 @@ async function handleDiceThrow(chatId: number, userId: number, userName: string)
             } else if (currentMatch.player1.roll !== undefined && currentMatch.player2!.roll !== undefined) {
                 await resolveMatch(chatId);
             }
+            
+            // Update tournament message to reflect current state
+            await updateTournamentMessage(chatId);
         } catch (error) {
             console.error('Error processing dice result:', error);
         }
@@ -632,10 +694,13 @@ async function resolveMatch(chatId: number) {
     } else if (roll2 > roll1) {
         winner = currentMatch.player2!;
     } else {
-        // Tie - reroll
-        await bot.sendMessage(chatId, `🤝 **НИЧЬЯ!** (${roll1} - ${roll2})\n\nПереигровка! Бросайте кубики снова.`);
+        // Tie - ask players to roll again
+        await bot.sendMessage(chatId, `🤝 **НИЧЬЯ!** (${roll1} - ${roll2})\n\nПереигровка! Нажмите кнопку "🎲 Кинуть кубик" снова.`);
         currentMatch.player1.roll = undefined;
         currentMatch.player2!.roll = undefined;
+        
+        // Update tournament message to show dice buttons again
+        await updateTournamentMessage(chatId);
         return;
     }
 
