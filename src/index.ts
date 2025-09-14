@@ -19,6 +19,8 @@ interface Tournament {
     messageId: number;
     participants: Set<number>;
     participantNames: Map<number, string>;
+    organizerId: number;
+    organizerName: string;
     bracket?: TournamentBracket;
     currentRound?: number;
     currentMatch?: number;
@@ -133,21 +135,17 @@ async function startTournament(chatId: number, initiator: TelegramBot.User | und
             reply_markup: keyboard
         });
 
-        // Store tournament data with organizer as first participant
-        const participants = new Set<number>();
-        const participantNames = new Map<number, string>();
-        
-        participants.add(initiator.id);
-        participantNames.set(initiator.id, initiatorName);
-        
+        // Store tournament data without organizer as participant
         activeTournaments.set(chatId, {
             messageId: sentMessage.message_id,
-            participants,
-            participantNames,
+            participants: new Set<number>(),
+            participantNames: new Map<number, string>(),
+            organizerId: initiator.id,
+            organizerName: initiatorName,
             gameState: 'registration'
         });
 
-        // Update message to show organizer as participant
+        // Update message to show current state
         await updateTournamentMessage(chatId);
 
         console.log(`Tournament started in chat ${chatId} by ${initiatorName}`);
@@ -166,7 +164,7 @@ async function updateTournamentMessage(chatId: number, userId?: number) {
         ? Array.from(tournament.participantNames.values()).map((name, index) => `${index + 1}. ${name}`).join('\n')
         : '_Пока никого нет_';
 
-    const updatedMessage = `🏆 **ТУРНИР** 🏆\n\n👥 **Участники (${tournament.participants.size}):**\n${participantsList}\n\n🎯 Нажмите кнопку ниже, чтобы присоединиться или выйти!`;
+    const updatedMessage = `🏆 **ТУРНИР** 🏆\n\n👑 **Организатор:** ${tournament.organizerName}\n\n👥 **Участники (${tournament.participants.size}):**\n${participantsList}\n\n🎯 Нажмите кнопку ниже, чтобы присоединиться или выйти!`;
     
     // Create dynamic keyboard based on user participation
     const buttons = [];
