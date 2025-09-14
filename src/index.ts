@@ -116,10 +116,15 @@ async function startTournament(chatId: number, initiator: TelegramBot.User | und
     const tournamentMessage = `🏆 **ТУРНИР НАЧАЛСЯ!** 🏆\n\nИнициатор: ${initiatorName}\n\n👥 **Участники:**\n_Пока никого нет_\n\n🎯 Нажмите кнопку ниже, чтобы присоединиться!`;
     
     const keyboard = {
-        inline_keyboard: [[
-            { text: '🎮 Участвую!', callback_data: 'join_tournament' },
-            { text: '🎲 Начать игру', callback_data: 'start_game' }
-        ]]
+        inline_keyboard: [
+            [
+                { text: '🎮 Участвую!', callback_data: 'join_tournament' },
+                { text: '❌ Выйти', callback_data: 'leave_tournament' }
+            ],
+            [
+                { text: '🎲 Начать игру', callback_data: 'start_game' }
+            ]
+        ]
     };
 
     try {
@@ -152,13 +157,18 @@ async function updateTournamentMessage(chatId: number) {
         ? Array.from(tournament.participantNames.values()).map((name, index) => `${index + 1}. ${name}`).join('\n')
         : '_Пока никого нет_';
 
-    const updatedMessage = `🏆 **ТУРНИР** 🏆\n\n👥 **Участники (${tournament.participants.size}):**\n${participantsList}\n\n🎯 Нажмите кнопку ниже, чтобы присоединиться!`;
+    const updatedMessage = `🏆 **ТУРНИР** 🏆\n\n👥 **Участники (${tournament.participants.size}):**\n${participantsList}\n\n🎯 Нажмите кнопку ниже, чтобы присоединиться или выйти!`;
     
     const keyboard = {
-        inline_keyboard: [[
-            { text: '🎮 Участвую!', callback_data: 'join_tournament' },
-            { text: '🎲 Начать игру', callback_data: 'start_game' }
-        ]]
+        inline_keyboard: [
+            [
+                { text: '🎮 Участвую!', callback_data: 'join_tournament' },
+                { text: '❌ Выйти', callback_data: 'leave_tournament' }
+            ],
+            [
+                { text: '🎲 Начать игру', callback_data: 'start_game' }
+            ]
+        ]
     };
 
     try {
@@ -221,12 +231,38 @@ bot.on('callback_query', async (callbackQuery) => {
         } else if (data === 'throw_dice') {
             await handleDiceThrow(chatId, userId, userName);
             await bot.answerCallbackQuery(callbackQuery.id, { text: 'Кубик брошен!' });
+        } else if (data === 'leave_tournament') {
+            await handleLeaveTournament(chatId, userId, userName);
+            await bot.answerCallbackQuery(callbackQuery.id, { text: 'Вы вышли из турнира!' });
         }
     } catch (error) {
         console.error('Error handling callback query:', error);
         await bot.answerCallbackQuery(callbackQuery.id, { text: 'Произошла ошибка!' });
     }
 });
+
+// Function to handle leaving tournament
+async function handleLeaveTournament(chatId: number, userId: number, userName: string) {
+    const tournament = activeTournaments.get(chatId);
+    if (!tournament) return;
+
+    // Check if tournament has already started
+    if (tournament.gameState === 'playing') {
+        return; // Can't leave once game has started
+    }
+
+    // Check if user is in tournament
+    if (!tournament.participants.has(userId)) {
+        return; // User is not in tournament
+    }
+
+    // Remove participant
+    tournament.participants.delete(userId);
+    tournament.participantNames.delete(userId);
+    
+    await updateTournamentMessage(chatId);
+    console.log(`${userName} left tournament in chat ${chatId}`);
+}
 
 // Function to create tournament bracket
 function createTournamentBracket(participants: Map<number, string>): TournamentBracket {
