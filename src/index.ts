@@ -538,13 +538,13 @@ async function advanceWinnersToNextRound(chatId: number) {
     for (let i = 0; i < currentRound.matches.length; i++) {
         const match = currentRound.matches[i];
         
-        if (winnerIndex < winners.length) {
-            match.player1 = { id: winners[winnerIndex].id, name: winners[winnerIndex].name };
+        if (winnerIndex < winners.length && winners[winnerIndex]) {
+            match.player1 = { id: winners[winnerIndex]!.id, name: winners[winnerIndex]!.name };
             winnerIndex++;
         }
         
-        if (winnerIndex < winners.length) {
-            match.player2 = { id: winners[winnerIndex].id, name: winners[winnerIndex].name };
+        if (winnerIndex < winners.length && winners[winnerIndex]) {
+            match.player2 = { id: winners[winnerIndex]!.id, name: winners[winnerIndex]!.name };
             winnerIndex++;
         }
     }
