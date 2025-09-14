@@ -28,6 +28,7 @@ interface Tournament {
 interface TournamentBracket {
     rounds: Round[];
     totalRounds: number;
+    byePlayer?: { id: number; name: string };
 }
 
 interface Round {
@@ -242,22 +243,23 @@ function createTournamentBracket(participants: Map<number, string>): TournamentB
     
     // Create first round matches
     const firstRoundMatches: Match[] = [];
-    for (let i = 0; i < playerList.length; i += 2) {
-        if (i + 1 < playerList.length) {
-            firstRoundMatches.push({
-                player1: { id: playerList[i].id, name: playerList[i].name },
-                player2: { id: playerList[i + 1].id, name: playerList[i + 1].name },
-                completed: false
-            });
-        } else {
-            // Odd number of players - this player gets a bye
-            firstRoundMatches.push({
-                player1: { id: playerList[i].id, name: playerList[i].name },
-                player2: { id: -1, name: 'БАЙ' },
-                winner: { id: playerList[i].id, name: playerList[i].name },
-                completed: true
-            });
-        }
+    
+    // If odd number of players, the last player gets a bye to the next round
+    const playersInFirstRound = playerList.length % 2 === 0 ? playerList.length : playerList.length - 1;
+    
+    // Create matches for pairs
+    for (let i = 0; i < playersInFirstRound; i += 2) {
+        firstRoundMatches.push({
+            player1: { id: playerList[i].id, name: playerList[i].name },
+            player2: { id: playerList[i + 1].id, name: playerList[i + 1].name },
+            completed: false
+        });
+    }
+    
+    // If there's an odd player, they automatically advance to the second round
+    let byePlayer = null;
+    if (playerList.length % 2 === 1) {
+        byePlayer = playerList[playerList.length - 1];
     }
     
     rounds.push({ matches: firstRoundMatches });
@@ -265,7 +267,13 @@ function createTournamentBracket(participants: Map<number, string>): TournamentB
     // Create subsequent rounds (empty for now)
     for (let round = 1; round < totalRounds; round++) {
         const prevRoundMatches = rounds[round - 1].matches.length;
-        const thisRoundMatches = Math.ceil(prevRoundMatches / 2);
+        let thisRoundMatches = Math.ceil(prevRoundMatches / 2);
+        
+        // Add bye player to second round if exists
+        if (round === 1 && byePlayer) {
+            thisRoundMatches = Math.ceil((prevRoundMatches + 1) / 2);
+        }
+        
         const matches: Match[] = [];
         
         for (let i = 0; i < thisRoundMatches; i++) {
@@ -279,7 +287,7 @@ function createTournamentBracket(participants: Map<number, string>): TournamentB
         rounds.push({ matches });
     }
     
-    return { rounds, totalRounds };
+    return { rounds, totalRounds, byePlayer: byePlayer || undefined };
 }
 
 // Function to start tournament bracket
@@ -305,16 +313,25 @@ async function showTournamentBracket(chatId: number) {
 
     let bracketText = '🏆 **ТУРНИРНАЯ СЕТКА** 🏆\n\n';
     
+    // Show bye player if exists
+    if (tournament.bracket.byePlayer) {
+        bracketText += `🎯 **Проходит в следующий раунд без игры:** ${tournament.bracket.byePlayer.name}\n\n`;
+    }
+    
     tournament.bracket.rounds.forEach((round, roundIndex) => {
         bracketText += `**Раунд ${roundIndex + 1}:**\n`;
         round.matches.forEach((match, matchIndex) => {
             const status = match.completed ? '✅' : '⏳';
-            const vs = match.player2.name === 'БАЙ' ? '(проходит без игры)' : `vs ${match.player2.name}`;
-            bracketText += `${status} ${match.player1.name} ${vs}`;
-            if (match.winner) {
-                bracketText += ` → **${match.winner.name}**`;
+            
+            if (match.player1.name === 'TBD' || match.player2.name === 'TBD') {
+                bracketText += `${status} Ожидание участников\n`;
+            } else {
+                bracketText += `${status} ${match.player1.name} vs ${match.player2.name}`;
+                if (match.winner) {
+                    bracketText += ` → **${match.winner.name}**`;
+                }
+                bracketText += '\n';
             }
-            bracketText += '\n';
         });
         bracketText += '\n';
     });
@@ -456,7 +473,25 @@ async function advanceWinnersToNextRound(chatId: number) {
     const currentRound = tournament.bracket.rounds[tournament.currentRound!];
 
     let winnerIndex = 0;
-    for (let i = 0; i < currentRound.matches.length; i++) {
+    let matchIndex = 0;
+    
+    // If this is round 2 and there's a bye player, place them first
+    if (tournament.currentRound === 1 && tournament.bracket.byePlayer) {
+        const match = currentRound.matches[matchIndex];
+        match.player1 = { id: tournament.bracket.byePlayer.id, name: tournament.bracket.byePlayer.name };
+        
+        // Get first winner from previous round
+        const winner = prevRound.matches[winnerIndex]?.winner;
+        if (winner) {
+            match.player2 = { id: winner.id, name: winner.name };
+        }
+        
+        winnerIndex += 1;
+        matchIndex += 1;
+    }
+    
+    // Fill remaining matches with winners from previous round
+    for (let i = matchIndex; i < currentRound.matches.length; i++) {
         const match = currentRound.matches[i];
         
         // Get winners from previous round
