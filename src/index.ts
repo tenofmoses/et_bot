@@ -38,7 +38,7 @@ interface Round {
 
 interface Match {
     player1: { id: number; name: string; roll?: number };
-    player2: { id: number; name: string; roll?: number };
+    player2: { id: number; name: string; roll?: number } | null;
     winner?: { id: number; name: string };
     completed: boolean;
 }
@@ -220,8 +220,8 @@ bot.on('callback_query', async (callbackQuery) => {
                 return;
             }
 
-            if (tournament.participants.size < 2) {
-                await bot.answerCallbackQuery(callbackQuery.id, { text: 'Нужно минимум 2 участника для начала игры!' });
+            if (tournament.participants.size < 1) {
+                await bot.answerCallbackQuery(callbackQuery.id, { text: 'Нужно минимум 1 участник для начала игры!' });
                 return;
             }
 
@@ -272,6 +272,25 @@ function createTournamentBracket(participants: Map<number, string>): TournamentB
     for (let i = playerList.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [playerList[i], playerList[j]] = [playerList[j], playerList[i]];
+    }
+    
+    // Handle single player case
+    if (playerList.length === 1) {
+        const rounds: Round[] = [{
+            matches: [{
+                player1: playerList[0],
+                player2: null,
+                winner: undefined,
+                completed: false
+            }]
+        }];
+        
+        return {
+            rounds,
+            totalRounds: 1,
+            byePlayer: undefined,
+            byeRound: -1
+        };
     }
     
     // Calculate total rounds needed
@@ -373,8 +392,14 @@ async function showTournamentBracket(chatId: number) {
         round.matches.forEach((match, matchIndex) => {
             const status = match.completed ? '✅' : '⏳';
             
-            if (match.player1.name === 'TBD' || match.player2.name === 'TBD') {
+            if (match.player1.name === 'TBD' || (match.player2 && match.player2.name === 'TBD')) {
                 bracketText += `${status} Ожидание участников\n`;
+            } else if (!match.player2) {
+                bracketText += `${status} ${match.player1.name} (одиночный)`;
+                if (match.winner) {
+                    bracketText += ` → **${match.winner.name}**`;
+                }
+                bracketText += '\n';
             } else {
                 bracketText += `${status} ${match.player1.name} vs ${match.player2.name}`;
                 if (match.winner) {
@@ -420,6 +445,23 @@ async function startNextMatch(chatId: number) {
         return;
     }
 
+    // Handle single player match
+    if (!currentMatch.player2) {
+        const matchText = `🎯 **ОДИНОЧНЫЙ ТУРНИР**\n\n${currentMatch.player1.name}, бросьте кубик чтобы завершить турнир!`;
+        
+        const keyboard = {
+            inline_keyboard: [[
+                { text: '🎲 Кинуть кубик', callback_data: 'throw_dice' }
+            ]]
+        };
+
+        await bot.sendMessage(chatId, matchText, {
+            parse_mode: 'Markdown',
+            reply_markup: keyboard
+        });
+        return;
+    }
+
     // Skip bye matches
     if (currentMatch.player2.name === 'БАЙ') {
         currentMatch.completed = true;
@@ -449,14 +491,37 @@ async function handleDiceThrow(chatId: number, userId: number, userName: string)
     const currentRound = tournament.bracket.rounds[tournament.currentRound!];
     const currentMatch = currentRound.matches[tournament.currentMatch!];
 
+    // Handle single player match
+    if (!currentMatch.player2) {
+        if (currentMatch.player1.id !== userId) {
+            return; // Not this player's turn
+        }
+        
+        if (currentMatch.player1.roll !== undefined) {
+            return; // Already rolled
+        }
+        
+        // Roll dice for single player
+        const roll = Math.floor(Math.random() * 6) + 1;
+        currentMatch.player1.roll = roll;
+        currentMatch.winner = currentMatch.player1;
+        currentMatch.completed = true;
+        
+        await bot.sendMessage(chatId, `🎲 ${userName} бросил: **${roll}**\n\n🏆 **ТУРНИР ЗАВЕРШЕН!**\n\n🥇 Победитель: **${currentMatch.player1.name}**`);
+        
+        // Clean up tournament
+        activeTournaments.delete(chatId);
+        return;
+    }
+
     // Check if user is in current match
-    if (currentMatch.player1.id !== userId && currentMatch.player2.id !== userId) {
+    if (currentMatch.player1.id !== userId && currentMatch.player2!.id !== userId) {
         return; // Not this player's turn
     }
 
     // Check if player already rolled
     if ((currentMatch.player1.id === userId && currentMatch.player1.roll !== undefined) ||
-        (currentMatch.player2.id === userId && currentMatch.player2.roll !== undefined)) {
+        (currentMatch.player2!.id === userId && currentMatch.player2!.roll !== undefined)) {
         return; // Already rolled
     }
 
@@ -470,13 +535,13 @@ async function handleDiceThrow(chatId: number, userId: number, userName: string)
     if (currentMatch.player1.id === userId) {
         currentMatch.player1.roll = roll;
     } else {
-        currentMatch.player2.roll = roll;
+        currentMatch.player2!.roll = roll;
     }
 
     await bot.sendMessage(chatId, `${userName} бросил кубик: **${roll}**`, { parse_mode: 'Markdown' });
 
     // Check if both players have rolled
-    if (currentMatch.player1.roll !== undefined && currentMatch.player2.roll !== undefined) {
+    if (currentMatch.player1.roll !== undefined && currentMatch.player2!.roll !== undefined) {
         await resolveMatch(chatId);
     }
 }
@@ -490,25 +555,25 @@ async function resolveMatch(chatId: number) {
     const currentMatch = currentRound.matches[tournament.currentMatch!];
 
     const roll1 = currentMatch.player1.roll!;
-    const roll2 = currentMatch.player2.roll!;
+    const roll2 = currentMatch.player2!.roll!;
 
     let winner;
     if (roll1 > roll2) {
         winner = currentMatch.player1;
     } else if (roll2 > roll1) {
-        winner = currentMatch.player2;
+        winner = currentMatch.player2!;
     } else {
         // Tie - reroll
         await bot.sendMessage(chatId, `🤝 **НИЧЬЯ!** (${roll1} - ${roll2})\n\nПереигровка! Бросайте кубики снова.`);
         currentMatch.player1.roll = undefined;
-        currentMatch.player2.roll = undefined;
+        currentMatch.player2!.roll = undefined;
         return;
     }
 
     currentMatch.winner = winner;
     currentMatch.completed = true;
 
-    await bot.sendMessage(chatId, `🏆 **ПОБЕДИТЕЛЬ МАТЧА:** ${winner.name}!\n\n${currentMatch.player1.name}: ${roll1}\n${currentMatch.player2.name}: ${roll2}`, { parse_mode: 'Markdown' });
+    await bot.sendMessage(chatId, `🏆 **ПОБЕДИТЕЛЬ МАТЧА:** ${winner.name}!\n\n${currentMatch.player1.name}: ${roll1}\n${currentMatch.player2!.name}: ${roll2}`, { parse_mode: 'Markdown' });
 
     // Move to next match
     setTimeout(() => startNextMatch(chatId), 2000);
