@@ -171,13 +171,18 @@ async function updateTournamentMessage(chatId: number, userId?: number) {
     // Create dynamic keyboard based on user participation
     const buttons = [];
     
-    // Always show join button
-    buttons.push([{ text: '🎮 Участвую!', callback_data: 'join_tournament' }]);
+    // Create first row based on participation status
+    const firstRow = [];
     
-    // Show leave button only if user is a participant
     if (userId && tournament.participants.has(userId)) {
-        buttons[0].push({ text: '❌ Выйти', callback_data: 'leave_tournament' });
+        // User is participant - show only leave button
+        firstRow.push({ text: '❌ Выйти', callback_data: 'leave_tournament' });
+    } else {
+        // User is not participant - show only join button
+        firstRow.push({ text: '🎮 Участвую!', callback_data: 'join_tournament' });
     }
+    
+    buttons.push(firstRow);
     
     // Second row with game controls
     buttons.push([
