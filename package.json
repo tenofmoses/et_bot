@@ -1,0 +1,26 @@
+{
+  "name": "telegram-dice-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot that rolls dice using dice emoji",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "watch": "tsc -w"
+  },
+  "packageManager": "pnpm@8.0.0",
+  "keywords": ["telegram", "bot", "dice", "nodejs", "typescript"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "node-telegram-bot-api": "^0.64.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.8.0",
+    "@types/node-telegram-bot-api": "^0.64.0",
+    "typescript": "^5.2.2",
+    "ts-node": "^10.9.1"
+  }
+}
