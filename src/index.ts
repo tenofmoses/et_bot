@@ -480,45 +480,6 @@ async function startTournamentBracket(chatId: number) {
     await startNextMatch(chatId);
 }
 
-// Function to show tournament bracket
-async function showTournamentBracket(chatId: number) {
-    const tournament = activeTournaments.get(chatId);
-    if (!tournament || !tournament.bracket) return;
-
-    let bracketText = '🏆 **ТУРНИРНАЯ СЕТКА** 🏆\n\n';
-    
-    // Show bye player if exists
-    if (tournament.bracket.byePlayer && tournament.bracket.byeRound !== undefined) {
-        bracketText += `🎯 **${tournament.bracket.byePlayer.name}** присоединится в раунде ${tournament.bracket.byeRound + 1}\n\n`;
-    }
-    
-    tournament.bracket.rounds.forEach((round, roundIndex) => {
-        bracketText += `**Раунд ${roundIndex + 1}:**\n`;
-        round.matches.forEach((match, matchIndex) => {
-            const status = match.completed ? '✅' : '⏳';
-            
-            if (match.player1.name === 'TBD' || (match.player2 && match.player2.name === 'TBD')) {
-                bracketText += `${status} Ожидание участников\n`;
-            } else if (!match.player2) {
-                bracketText += `${status} ${match.player1.name} (одиночный)`;
-                if (match.winner) {
-                    bracketText += ` → **${match.winner.name}**`;
-                }
-                bracketText += '\n';
-            } else {
-                bracketText += `${status} ${match.player1.name} vs ${match.player2.name}`;
-                if (match.winner) {
-                    bracketText += ` → **${match.winner.name}**`;
-                }
-                bracketText += '\n';
-            }
-        });
-        bracketText += '\n';
-    });
-
-    await bot.sendMessage(chatId, bracketText, { parse_mode: 'Markdown' });
-}
-
 // Function to start next match
 async function startNextMatch(chatId: number) {
     const tournament = activeTournaments.get(chatId);
@@ -752,7 +713,7 @@ async function advanceWinnersToNextRound(chatId: number) {
     if (shouldByePlayerJoin) {
         await bot.sendMessage(chatId, `🎯 **${tournament.bracket.byePlayer!.name}** присоединяется к турниру!`);
     }
-    await showTournamentBracket(chatId);
+    await updateTournamentMessage(chatId);
 }
 
 // Function to finish tournament
