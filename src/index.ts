@@ -735,13 +735,17 @@ async function resolveMatch(chatId: number) {
     } else if (roll2 > roll1) {
         winner = currentMatch.player2!;
     } else {
-        // Tie - ask players to roll again
-        await bot.sendMessage(chatId, `🤝 НИЧЬЯ! (${roll1} - ${roll2})\n\nПереигровка! Нажмите кнопку "🎲 Кинуть кубик" снова.`);
+        // Tie - restart the round with both players
+        await bot.sendMessage(chatId, `🤝 НИЧЬЯ! (${roll1} - ${roll2})\n\n🔄 Начинаем раунд заново!`);
+        
+        // Reset both players' rolls
         currentMatch.player1.roll = undefined;
         currentMatch.player2!.roll = undefined;
         
-        // Update tournament message to show dice buttons again
-        await updateTournamentMessage(chatId);
+        // Restart the match after a delay
+        setTimeout(async () => {
+            await startNextMatch(chatId);
+        }, 2000);
         return;
     }
 
