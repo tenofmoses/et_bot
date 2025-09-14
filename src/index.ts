@@ -155,8 +155,7 @@ async function startTournament(chatId: number, initiator: TelegramBot.User | und
             startTime: startTime
         });
 
-        // Update message to show current state
-        await updateTournamentMessage(chatId);
+        // Don't update message immediately - let users see the initial state
 
         console.log(`Tournament started in chat ${chatId} by ${initiatorName}`);
     } catch (error) {
@@ -182,12 +181,45 @@ async function updateTournamentMessage(chatId: number, userId?: number) {
     
     updatedMessage += `\n\n👥 Участники (${tournament.participants.size}):\n${participantsList}`;
     
-    // Add current round info if game is in progress
+    // Add tournament bracket and current match info if game is in progress
     if (tournament.gameState === 'playing' && tournament.bracket) {
+        updatedMessage += '\n\n🏆 ТУРНИРНАЯ СЕТКА 🏆\n\n';
+        
+        // Show bye player if exists
+        if (tournament.bracket.byePlayer && tournament.bracket.byeRound !== undefined) {
+            updatedMessage += `🎯 ${tournament.bracket.byePlayer.name} присоединится в раунде ${tournament.bracket.byeRound + 1}\n\n`;
+        }
+        
+        // Show all rounds
+        tournament.bracket.rounds.forEach((round, roundIndex) => {
+            updatedMessage += `Раунд ${roundIndex + 1}:\n`;
+            round.matches.forEach((match, matchIndex) => {
+                const status = match.completed ? '✅' : '⏳';
+                
+                if (match.player1.name === 'TBD' || (match.player2 && match.player2.name === 'TBD')) {
+                    updatedMessage += `${status} Ожидание участников\n`;
+                } else if (!match.player2) {
+                    updatedMessage += `${status} ${match.player1.name} (одиночный)`;
+                    if (match.winner) {
+                        updatedMessage += ` → ${match.winner.name}`;
+                    }
+                    updatedMessage += '\n';
+                } else {
+                    updatedMessage += `${status} ${match.player1.name} vs ${match.player2.name}`;
+                    if (match.winner) {
+                        updatedMessage += ` → ${match.winner.name}`;
+                    }
+                    updatedMessage += '\n';
+                }
+            });
+            updatedMessage += '\n';
+        });
+        
+        // Show current match details
         const currentRound = tournament.bracket.rounds[tournament.currentRound!];
         const currentMatch = currentRound.matches[tournament.currentMatch!];
         
-        updatedMessage += `\n\n🎯 Раунд ${tournament.currentRound! + 1}\n`;
+        updatedMessage += `🎯 ТЕКУЩИЙ МАТЧ (Раунд ${tournament.currentRound! + 1}):\n`;
         
         if (!currentMatch.player2) {
             updatedMessage += `${currentMatch.player1.name} (одиночный матч)`;
@@ -208,42 +240,32 @@ async function updateTournamentMessage(chatId: number, userId?: number) {
         updatedMessage += '\n\n🎯 Нажмите кнопку ниже, чтобы присоединиться или выйти!';
     }
     
-    // Create dynamic keyboard based on game state and user participation
+    // Create universal keyboard - show all possible buttons
     const buttons = [];
     
     if (tournament.gameState === 'registration') {
-        // Registration phase - show join/leave buttons for all users
-        const firstRow = [];
+        // Show both join and leave buttons - users will see appropriate responses
+        buttons.push([
+            { text: '🎮 Участвую!', callback_data: 'join_tournament' },
+            { text: '❌ Выйти', callback_data: 'leave_tournament' }
+        ]);
         
-        if (userId && tournament.participants.has(userId)) {
-            // User is participant - show only leave button
-            firstRow.push({ text: '❌ Выйти', callback_data: 'leave_tournament' });
-        } else {
-            // User is not participant - show only join button
-            firstRow.push({ text: '🎮 Участвую!', callback_data: 'join_tournament' });
-        }
-        
-        buttons.push(firstRow);
-        
-        // Second row with game controls - only for organizer
-        if (userId && userId === tournament.organizerId) {
-            buttons.push([
-                { text: '🎲 Начать игру', callback_data: 'start_game' },
-                { text: '🚫 Отменить турнир', callback_data: 'cancel_tournament' }
-            ]);
-        }
+        // Show organizer controls
+        buttons.push([
+            { text: '🎲 Начать игру', callback_data: 'start_game' },
+            { text: '🚫 Отменить турнир', callback_data: 'cancel_tournament' }
+        ]);
     } else if (tournament.gameState === 'playing') {
-        // Game in progress - only show dice button for current players
+        // Show dice button for current players only
         const currentRound = tournament.bracket!.rounds[tournament.currentRound!];
         const currentMatch = currentRound.matches[tournament.currentMatch!];
         
-        if (userId && (currentMatch.player1.id === userId || (currentMatch.player2 && currentMatch.player2.id === userId))) {
-            // Current player can throw dice
+        // Only show dice button if match is not completed and players haven't rolled yet
+        if (!currentMatch.completed && 
+            (currentMatch.player1.roll === undefined || 
+             (currentMatch.player2 && currentMatch.player2.roll === undefined))) {
             buttons.push([{ text: '🎲 Кинуть кубик', callback_data: 'throw_dice' }]);
         }
-    } else if (tournament.gameState === 'finished' || tournament.gameState === 'cancelled') {
-        // Tournament finished or cancelled - no buttons
-        buttons.length = 0;
     }
     
     const keyboard = {
@@ -292,36 +314,37 @@ bot.on('callback_query', async (callbackQuery) => {
             await bot.answerCallbackQuery(callbackQuery.id, { text: 'Вы присоединились к турниру!' });
             
             console.log(`${userName} joined tournament in chat ${chatId}`);
-        } else if (data === 'start_game') {
+        } else if (data === 'throw_dice') {
+            await handleDiceThrow(chatId, userId, userName);
+            await bot.answerCallbackQuery(callbackQuery.id, { text: 'Кубик брошен!' });
+        } else if (data === 'leave_tournament') {
+            const tournament = activeTournaments.get(chatId);
+            if (!tournament || !tournament.participants.has(userId)) {
+                await bot.answerCallbackQuery(callbackQuery.id, { text: 'Вы не участвуете в турнире!' });
+                return;
+            }
+            await handleLeaveTournament(chatId, userId, userName);
+            await bot.answerCallbackQuery(callbackQuery.id, { text: 'Вы вышли из турнира!' });
+        } else if (data === 'cancel_tournament') {
             const tournament = activeTournaments.get(chatId);
             if (!tournament) {
                 await bot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир не найден!' });
                 return;
             }
-
-            // Only organizer can start the tournament
-            if (userId !== tournament.organizerId) {
+            await handleCancelTournament(chatId, userId);
+            await bot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир отменен!' });
+        } else if (data === 'start_game') {
+            const tournament = activeTournaments.get(chatId);
+            if (!tournament || tournament.organizerId !== userId) {
                 await bot.answerCallbackQuery(callbackQuery.id, { text: 'Только организатор может начать турнир!' });
                 return;
             }
-
             if (tournament.participants.size < 1) {
                 await bot.answerCallbackQuery(callbackQuery.id, { text: 'Нужно минимум 1 участник для начала игры!' });
                 return;
             }
-
-            // Start the tournament bracket
             await startTournamentBracket(chatId);
             await bot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир начался!' });
-        } else if (data === 'throw_dice') {
-            await handleDiceThrow(chatId, userId, userName);
-            await bot.answerCallbackQuery(callbackQuery.id, { text: 'Кубик брошен!' });
-        } else if (data === 'leave_tournament') {
-            await handleLeaveTournament(chatId, userId, userName);
-            await bot.answerCallbackQuery(callbackQuery.id, { text: 'Вы вышли из турнира!' });
-        } else if (data === 'cancel_tournament') {
-            await handleCancelTournament(chatId, userId);
-            await bot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир отменен!' });
         }
     } catch (error) {
         console.error('Error handling callback query:', error);
@@ -334,15 +357,10 @@ async function handleCancelTournament(chatId: number, userId: number) {
     const tournament = activeTournaments.get(chatId);
     if (!tournament) return;
 
-    // Only organizer can cancel
-    if (tournament.organizerId !== userId) {
-        return;
-    }
-
     // Set tournament state to cancelled
     tournament.gameState = 'cancelled';
     
-    await bot.editMessageText('🚫 ТУРНИР ОТМЕНЕН\n\nТурнир был отменен организатором.', {
+    await bot.editMessageText('🚫 ТУРНИР ОТМЕНЕН\n\nТурнир был отменен.', {
         chat_id: chatId,
         message_id: tournament.messageId,
         parse_mode: 'Markdown'
@@ -522,8 +540,8 @@ async function startTournamentBracket(chatId: number) {
     tournament.currentMatch = 0;
     tournament.gameState = 'playing';
 
-    // Send tournament bracket as separate message and start first match
-    await sendTournamentBracket(chatId);
+    // Update main message to show tournament bracket and start first match
+    await updateTournamentMessage(chatId);
     await startNextMatch(chatId);
 }
 
@@ -539,6 +557,15 @@ async function startNextMatch(chatId: number) {
         // Move to next match or round
         tournament.currentMatch! += 1;
         if (tournament.currentMatch! >= currentRound.matches.length) {
+            // Check if all matches in current round are completed
+            const allMatchesCompleted = currentRound.matches.every(match => match.completed);
+            if (!allMatchesCompleted) {
+                // Still have matches to complete in this round
+                tournament.currentMatch = 0;
+                await startNextMatch(chatId);
+                return;
+            }
+            
             // Move to next round
             tournament.currentRound! += 1;
             tournament.currentMatch = 0;
@@ -647,7 +674,8 @@ async function handleDiceThrow(chatId: number, userId: number, userName: string)
         return; // Already rolled
     }
 
-    // Roll dice
+    // Roll dice with player name
+    await bot.sendMessage(chatId, `🎲 ${userName} кидает кубик...`);
     const diceMessage = await bot.sendDice(chatId, { emoji: '🎲' });
     
     // Wait for dice animation to complete and get the result
@@ -656,6 +684,9 @@ async function handleDiceThrow(chatId: number, userId: number, userName: string)
             // Get the dice value from the message
             const roll = diceMessage.dice?.value || Math.floor(Math.random() * 6) + 1;
             
+            // Announce the result
+            await bot.sendMessage(chatId, `🎯 ${userName} выбросил: ${roll}`);
+            
             // Store roll result
             if (currentMatch.player1.id === userId) {
                 currentMatch.player1.roll = roll;
@@ -663,16 +694,18 @@ async function handleDiceThrow(chatId: number, userId: number, userName: string)
                 currentMatch.player2!.roll = roll;
             }
 
-            await bot.sendMessage(chatId, `${userName} бросил: ${roll}`);
-
             // Check if both players have rolled (for multiplayer) or complete single player match
             if (!currentMatch.player2) {
                 // Single player - complete immediately
                 currentMatch.winner = currentMatch.player1;
                 currentMatch.completed = true;
                 
-                await bot.sendMessage(chatId, `🏆 ТУРНИР ЗАВЕРШЕН!\n\n🥇 Победитель: ${currentMatch.player1.name}`);
-                activeTournaments.delete(chatId);
+                // Check if this was the last match in the tournament
+                if (tournament.bracket && tournament.currentRound! >= tournament.bracket.totalRounds - 1) {
+                    await finishTournament(chatId);
+                } else {
+                    await startNextMatch(chatId);
+                }
             } else if (currentMatch.player1.roll !== undefined && currentMatch.player2!.roll !== undefined) {
                 await resolveMatch(chatId);
             }
@@ -782,7 +815,44 @@ async function finishTournament(chatId: number) {
     await updateTournamentMessage(chatId);
 
     if (champion) {
-        await bot.sendMessage(chatId, `🎉 ТУРНИР ЗАВЕРШЕН! 🎉\n\n👑 ЧЕМПИОН: ${champion.name}! 👑\n\nПоздравляем с победой! 🏆`);
+        // Create final tournament results message with full bracket
+        let resultsMessage = `🎉 ТУРНИР ЗАВЕРШЕН! 🎉\n\n👑 ЧЕМПИОН: ${champion.name}! 👑\n\n`;
+        
+        resultsMessage += `🏆 ФИНАЛЬНАЯ ТУРНИРНАЯ ТАБЛИЦА 🏆\n\n`;
+        
+        // Show bye player if exists
+        if (tournament.bracket.byePlayer && tournament.bracket.byeRound !== undefined) {
+            resultsMessage += `🎯 ${tournament.bracket.byePlayer.name} присоединился в раунде ${tournament.bracket.byeRound + 1}\n\n`;
+        }
+        
+        // Show all rounds with results
+        tournament.bracket.rounds.forEach((round, roundIndex) => {
+            resultsMessage += `Раунд ${roundIndex + 1}:\n`;
+            round.matches.forEach((match, matchIndex) => {
+                const status = '✅'; // All matches are completed at this point
+                
+                if (match.player1.name === 'TBD' || (match.player2 && match.player2.name === 'TBD')) {
+                    resultsMessage += `${status} Ожидание участников\n`;
+                } else if (!match.player2) {
+                    resultsMessage += `${status} ${match.player1.name} (одиночный)`;
+                    if (match.winner) {
+                        resultsMessage += ` → 🏆 ${match.winner.name}`;
+                    }
+                    resultsMessage += '\n';
+                } else {
+                    resultsMessage += `${status} ${match.player1.name} vs ${match.player2.name}`;
+                    if (match.winner) {
+                        resultsMessage += ` → 🏆 ${match.winner.name}`;
+                    }
+                    resultsMessage += '\n';
+                }
+            });
+            resultsMessage += '\n';
+        });
+        
+        resultsMessage += `🎊 Поздравляем с победой! 🎊`;
+        
+        await bot.sendMessage(chatId, resultsMessage);
     }
 
     // Clean up tournament after a delay to allow message update
