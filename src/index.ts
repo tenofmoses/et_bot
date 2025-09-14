@@ -19,6 +19,26 @@ interface Tournament {
     messageId: number;
     participants: Set<number>;
     participantNames: Map<number, string>;
+    bracket?: TournamentBracket;
+    currentRound?: number;
+    currentMatch?: number;
+    gameState?: 'registration' | 'playing' | 'finished';
+}
+
+interface TournamentBracket {
+    rounds: Round[];
+    totalRounds: number;
+}
+
+interface Round {
+    matches: Match[];
+}
+
+interface Match {
+    player1: { id: number; name: string; roll?: number };
+    player2: { id: number; name: string; roll?: number };
+    winner?: { id: number; name: string };
+    completed: boolean;
 }
 
 const activeTournaments = new Map<number, Tournament>();
@@ -110,7 +130,8 @@ async function startTournament(chatId: number, initiator: TelegramBot.User | und
         activeTournaments.set(chatId, {
             messageId: sentMessage.message_id,
             participants: new Set(),
-            participantNames: new Map()
+            participantNames: new Map(),
+            gameState: 'registration'
         });
 
         console.log(`Tournament started in chat ${chatId} by ${initiatorName}`);
@@ -192,9 +213,12 @@ bot.on('callback_query', async (callbackQuery) => {
                 return;
             }
 
-            // Start the dice game
-            await startDiceGame(chatId);
-            await bot.answerCallbackQuery(callbackQuery.id, { text: 'Игра началась!' });
+            // Start the tournament bracket
+            await startTournamentBracket(chatId);
+            await bot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир начался!' });
+        } else if (data === 'throw_dice') {
+            await handleDiceThrow(chatId, userId, userName);
+            await bot.answerCallbackQuery(callbackQuery.id, { text: 'Кубик брошен!' });
         }
     } catch (error) {
         console.error('Error handling callback query:', error);
@@ -202,46 +226,270 @@ bot.on('callback_query', async (callbackQuery) => {
     }
 });
 
-// Function to start dice game
-async function startDiceGame(chatId: number) {
+// Function to create tournament bracket
+function createTournamentBracket(participants: Map<number, string>): TournamentBracket {
+    const playerList = Array.from(participants.entries()).map(([id, name]) => ({ id, name }));
+    
+    // Shuffle participants randomly
+    for (let i = playerList.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [playerList[i], playerList[j]] = [playerList[j], playerList[i]];
+    }
+    
+    // Calculate total rounds needed
+    const totalRounds = Math.ceil(Math.log2(playerList.length));
+    const rounds: Round[] = [];
+    
+    // Create first round matches
+    const firstRoundMatches: Match[] = [];
+    for (let i = 0; i < playerList.length; i += 2) {
+        if (i + 1 < playerList.length) {
+            firstRoundMatches.push({
+                player1: { id: playerList[i].id, name: playerList[i].name },
+                player2: { id: playerList[i + 1].id, name: playerList[i + 1].name },
+                completed: false
+            });
+        } else {
+            // Odd number of players - this player gets a bye
+            firstRoundMatches.push({
+                player1: { id: playerList[i].id, name: playerList[i].name },
+                player2: { id: -1, name: 'БАЙ' },
+                winner: { id: playerList[i].id, name: playerList[i].name },
+                completed: true
+            });
+        }
+    }
+    
+    rounds.push({ matches: firstRoundMatches });
+    
+    // Create subsequent rounds (empty for now)
+    for (let round = 1; round < totalRounds; round++) {
+        const prevRoundMatches = rounds[round - 1].matches.length;
+        const thisRoundMatches = Math.ceil(prevRoundMatches / 2);
+        const matches: Match[] = [];
+        
+        for (let i = 0; i < thisRoundMatches; i++) {
+            matches.push({
+                player1: { id: -1, name: 'TBD' },
+                player2: { id: -1, name: 'TBD' },
+                completed: false
+            });
+        }
+        
+        rounds.push({ matches });
+    }
+    
+    return { rounds, totalRounds };
+}
+
+// Function to start tournament bracket
+async function startTournamentBracket(chatId: number) {
     const tournament = activeTournaments.get(chatId);
     if (!tournament) return;
 
-    const participants = Array.from(tournament.participantNames.values());
+    // Create bracket
+    tournament.bracket = createTournamentBracket(tournament.participantNames);
+    tournament.currentRound = 0;
+    tournament.currentMatch = 0;
+    tournament.gameState = 'playing';
+
+    // Show bracket and start first match
+    await showTournamentBracket(chatId);
+    await startNextMatch(chatId);
+}
+
+// Function to show tournament bracket
+async function showTournamentBracket(chatId: number) {
+    const tournament = activeTournaments.get(chatId);
+    if (!tournament || !tournament.bracket) return;
+
+    let bracketText = '🏆 **ТУРНИРНАЯ СЕТКА** 🏆\n\n';
     
-    await bot.sendMessage(chatId, `🎲 **ИГРА НАЧАЛАСЬ!** 🎲\n\nУчастники: ${participants.join(', ')}\n\nКаждый участник бросает кубик! Побеждает тот, у кого выпадет наибольшее число!`);
-    
-    // Roll dice for each participant
-    const results: { name: string, roll: number }[] = [];
-    
-    for (const participantName of participants) {
-        const diceMessage = await bot.sendDice(chatId, { emoji: '🎲' });
-        // Note: In real implementation, you'd need to wait for the dice animation to complete
-        // and get the actual result. For now, we'll simulate it.
-        const roll = Math.floor(Math.random() * 6) + 1;
-        results.push({ name: participantName, roll });
-        
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait between rolls
-    }
-    
-    // Determine winner
-    const maxRoll = Math.max(...results.map(r => r.roll));
-    const winners = results.filter(r => r.roll === maxRoll);
-    
-    let resultMessage = '🏆 **РЕЗУЛЬТАТЫ ТУРНИРА** 🏆\n\n';
-    results.forEach(result => {
-        const emoji = result.roll === maxRoll ? '👑' : '🎲';
-        resultMessage += `${emoji} ${result.name}: ${result.roll}\n`;
+    tournament.bracket.rounds.forEach((round, roundIndex) => {
+        bracketText += `**Раунд ${roundIndex + 1}:**\n`;
+        round.matches.forEach((match, matchIndex) => {
+            const status = match.completed ? '✅' : '⏳';
+            const vs = match.player2.name === 'БАЙ' ? '(проходит без игры)' : `vs ${match.player2.name}`;
+            bracketText += `${status} ${match.player1.name} ${vs}`;
+            if (match.winner) {
+                bracketText += ` → **${match.winner.name}**`;
+            }
+            bracketText += '\n';
+        });
+        bracketText += '\n';
     });
-    
-    if (winners.length === 1) {
-        resultMessage += `\n🎉 **ПОБЕДИТЕЛЬ: ${winners[0].name}!** 🎉`;
-    } else {
-        resultMessage += `\n🤝 **НИЧЬЯ между:** ${winners.map(w => w.name).join(', ')}`;
+
+    await bot.sendMessage(chatId, bracketText, { parse_mode: 'Markdown' });
+}
+
+// Function to start next match
+async function startNextMatch(chatId: number) {
+    const tournament = activeTournaments.get(chatId);
+    if (!tournament || !tournament.bracket) return;
+
+    const currentRound = tournament.bracket.rounds[tournament.currentRound!];
+    const currentMatch = currentRound.matches[tournament.currentMatch!];
+
+    if (!currentMatch || currentMatch.completed) {
+        // Move to next match or round
+        tournament.currentMatch! += 1;
+        if (tournament.currentMatch! >= currentRound.matches.length) {
+            // Move to next round
+            tournament.currentRound! += 1;
+            tournament.currentMatch = 0;
+            
+            if (tournament.currentRound! >= tournament.bracket.totalRounds) {
+                // Tournament finished
+                await finishTournament(chatId);
+                return;
+            }
+            
+            // Advance winners to next round
+            await advanceWinnersToNextRound(chatId);
+        }
+        
+        // Start next match
+        await startNextMatch(chatId);
+        return;
     }
+
+    // Skip bye matches
+    if (currentMatch.player2.name === 'БАЙ') {
+        currentMatch.completed = true;
+        await startNextMatch(chatId);
+        return;
+    }
+
+    const matchText = `🎯 **МАТЧ ${tournament.currentMatch! + 1}** (Раунд ${tournament.currentRound! + 1})\n\n${currentMatch.player1.name} vs ${currentMatch.player2.name}\n\nВы должны бросить кубик!`;
     
-    await bot.sendMessage(chatId, resultMessage);
+    const keyboard = {
+        inline_keyboard: [[
+            { text: '🎲 Кинуть кубик', callback_data: 'throw_dice' }
+        ]]
+    };
+
+    await bot.sendMessage(chatId, matchText, {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard
+    });
+}
+
+// Function to handle dice throw
+async function handleDiceThrow(chatId: number, userId: number, userName: string) {
+    const tournament = activeTournaments.get(chatId);
+    if (!tournament || !tournament.bracket) return;
+
+    const currentRound = tournament.bracket.rounds[tournament.currentRound!];
+    const currentMatch = currentRound.matches[tournament.currentMatch!];
+
+    // Check if user is in current match
+    if (currentMatch.player1.id !== userId && currentMatch.player2.id !== userId) {
+        return; // Not this player's turn
+    }
+
+    // Check if player already rolled
+    if ((currentMatch.player1.id === userId && currentMatch.player1.roll !== undefined) ||
+        (currentMatch.player2.id === userId && currentMatch.player2.roll !== undefined)) {
+        return; // Already rolled
+    }
+
+    // Roll dice
+    const diceMessage = await bot.sendDice(chatId, { emoji: '🎲' });
     
+    // Simulate dice result (in real implementation, you'd get this from the dice message)
+    const roll = Math.floor(Math.random() * 6) + 1;
+    
+    // Store roll result
+    if (currentMatch.player1.id === userId) {
+        currentMatch.player1.roll = roll;
+    } else {
+        currentMatch.player2.roll = roll;
+    }
+
+    await bot.sendMessage(chatId, `${userName} бросил кубик: **${roll}**`, { parse_mode: 'Markdown' });
+
+    // Check if both players have rolled
+    if (currentMatch.player1.roll !== undefined && currentMatch.player2.roll !== undefined) {
+        await resolveMatch(chatId);
+    }
+}
+
+// Function to resolve match
+async function resolveMatch(chatId: number) {
+    const tournament = activeTournaments.get(chatId);
+    if (!tournament || !tournament.bracket) return;
+
+    const currentRound = tournament.bracket.rounds[tournament.currentRound!];
+    const currentMatch = currentRound.matches[tournament.currentMatch!];
+
+    const roll1 = currentMatch.player1.roll!;
+    const roll2 = currentMatch.player2.roll!;
+
+    let winner;
+    if (roll1 > roll2) {
+        winner = currentMatch.player1;
+    } else if (roll2 > roll1) {
+        winner = currentMatch.player2;
+    } else {
+        // Tie - reroll
+        await bot.sendMessage(chatId, `🤝 **НИЧЬЯ!** (${roll1} - ${roll2})\n\nПереигровка! Бросайте кубики снова.`);
+        currentMatch.player1.roll = undefined;
+        currentMatch.player2.roll = undefined;
+        return;
+    }
+
+    currentMatch.winner = winner;
+    currentMatch.completed = true;
+
+    await bot.sendMessage(chatId, `🏆 **ПОБЕДИТЕЛЬ МАТЧА:** ${winner.name}!\n\n${currentMatch.player1.name}: ${roll1}\n${currentMatch.player2.name}: ${roll2}`, { parse_mode: 'Markdown' });
+
+    // Move to next match
+    setTimeout(() => startNextMatch(chatId), 2000);
+}
+
+// Function to advance winners to next round
+async function advanceWinnersToNextRound(chatId: number) {
+    const tournament = activeTournaments.get(chatId);
+    if (!tournament || !tournament.bracket) return;
+
+    const prevRound = tournament.bracket.rounds[tournament.currentRound! - 1];
+    const currentRound = tournament.bracket.rounds[tournament.currentRound!];
+
+    let winnerIndex = 0;
+    for (let i = 0; i < currentRound.matches.length; i++) {
+        const match = currentRound.matches[i];
+        
+        // Get winners from previous round
+        const winner1 = prevRound.matches[winnerIndex]?.winner;
+        const winner2 = prevRound.matches[winnerIndex + 1]?.winner;
+        
+        if (winner1) {
+            match.player1 = { id: winner1.id, name: winner1.name };
+        }
+        if (winner2) {
+            match.player2 = { id: winner2.id, name: winner2.name };
+        }
+        
+        winnerIndex += 2;
+    }
+
+    await bot.sendMessage(chatId, `🔄 **ПЕРЕХОД К РАУНДУ ${tournament.currentRound! + 1}**`);
+    await showTournamentBracket(chatId);
+}
+
+// Function to finish tournament
+async function finishTournament(chatId: number) {
+    const tournament = activeTournaments.get(chatId);
+    if (!tournament || !tournament.bracket) return;
+
+    const finalRound = tournament.bracket.rounds[tournament.bracket.totalRounds - 1];
+    const finalMatch = finalRound.matches[0];
+    const champion = finalMatch.winner;
+
+    if (champion) {
+        await bot.sendMessage(chatId, `🎉 **ТУРНИР ЗАВЕРШЕН!** 🎉\n\n👑 **ЧЕМПИОН: ${champion.name}!** 👑\n\nПоздравляем с победой! 🏆`, { parse_mode: 'Markdown' });
+    }
+
     // Clean up tournament
     activeTournaments.delete(chatId);
     console.log(`Tournament completed in chat ${chatId}`);
