@@ -548,15 +548,24 @@ async function handleDiceThrow(chatId: number, userId: number, userName: string)
         }
         
         // Roll dice for single player
-        const roll = Math.floor(Math.random() * 6) + 1;
-        currentMatch.player1.roll = roll;
-        currentMatch.winner = currentMatch.player1;
-        currentMatch.completed = true;
+        const diceMessage = await bot.sendDice(chatId, { emoji: '🎲' });
         
-        await bot.sendMessage(chatId, `🎲 ${userName} бросил: **${roll}**\n\n🏆 **ТУРНИР ЗАВЕРШЕН!**\n\n🥇 Победитель: **${currentMatch.player1.name}**`);
-        
-        // Clean up tournament
-        activeTournaments.delete(chatId);
+        // Wait for dice animation to complete and get the result
+        setTimeout(async () => {
+            try {
+                const roll = diceMessage.dice?.value || Math.floor(Math.random() * 6) + 1;
+                currentMatch.player1.roll = roll;
+                currentMatch.winner = currentMatch.player1;
+                currentMatch.completed = true;
+                
+                await bot.sendMessage(chatId, `🎲 ${userName} бросил: **${roll}**\n\n🏆 **ТУРНИР ЗАВЕРШЕН!**\n\n🥇 Победитель: **${currentMatch.player1.name}**`);
+                
+                // Clean up tournament
+                activeTournaments.delete(chatId);
+            } catch (error) {
+                console.error('Error processing single player dice result:', error);
+            }
+        }, 4000); // Wait 4 seconds for dice animation
         return;
     }
 
@@ -574,22 +583,36 @@ async function handleDiceThrow(chatId: number, userId: number, userName: string)
     // Roll dice
     const diceMessage = await bot.sendDice(chatId, { emoji: '🎲' });
     
-    // Simulate dice result (in real implementation, you'd get this from the dice message)
-    const roll = Math.floor(Math.random() * 6) + 1;
-    
-    // Store roll result
-    if (currentMatch.player1.id === userId) {
-        currentMatch.player1.roll = roll;
-    } else {
-        currentMatch.player2!.roll = roll;
-    }
+    // Wait for dice animation to complete and get the result
+    setTimeout(async () => {
+        try {
+            // Get the dice value from the message
+            const roll = diceMessage.dice?.value || Math.floor(Math.random() * 6) + 1;
+            
+            // Store roll result
+            if (currentMatch.player1.id === userId) {
+                currentMatch.player1.roll = roll;
+            } else {
+                currentMatch.player2!.roll = roll;
+            }
 
-    await bot.sendMessage(chatId, `${userName} бросил кубик: **${roll}**`, { parse_mode: 'Markdown' });
+            await bot.sendMessage(chatId, `${userName} бросил: **${roll}**`, { parse_mode: 'Markdown' });
 
-    // Check if both players have rolled
-    if (currentMatch.player1.roll !== undefined && currentMatch.player2!.roll !== undefined) {
-        await resolveMatch(chatId);
-    }
+            // Check if both players have rolled (for multiplayer) or complete single player match
+            if (!currentMatch.player2) {
+                // Single player - complete immediately
+                currentMatch.winner = currentMatch.player1;
+                currentMatch.completed = true;
+                
+                await bot.sendMessage(chatId, `🏆 **ТУРНИР ЗАВЕРШЕН!**\n\n🥇 Победитель: **${currentMatch.player1.name}**`);
+                activeTournaments.delete(chatId);
+            } else if (currentMatch.player1.roll !== undefined && currentMatch.player2!.roll !== undefined) {
+                await resolveMatch(chatId);
+            }
+        } catch (error) {
+            console.error('Error processing dice result:', error);
+        }
+    }, 4000); // Wait 4 seconds for dice animation
 }
 
 // Function to resolve match
