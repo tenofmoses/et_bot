@@ -24,7 +24,8 @@ interface Tournament {
     bracket?: TournamentBracket;
     currentRound?: number;
     currentMatch?: number;
-    gameState?: 'registration' | 'playing' | 'finished';
+    gameState?: 'registration' | 'playing' | 'finished' | 'cancelled';
+    startTime?: string;
 }
 
 interface TournamentBracket {
@@ -76,9 +77,11 @@ bot.on('message', (msg) => {
         return;
     }
 
-    // Handle tournament trigger
+    // Handle tournament trigger with optional time
     if (messageText?.toLowerCase().includes('турнир')) {
-        startTournament(chatId, msg.from);
+        const timeMatch = messageText.match(/(\d{1,2}):(\d{2})/);
+        const startTime = timeMatch ? timeMatch[0] : undefined;
+        startTournament(chatId, msg.from, startTime);
         return;
     }
 
@@ -104,7 +107,7 @@ bot.on('message', (msg) => {
 });
 
 // Function to start a tournament
-async function startTournament(chatId: number, initiator: TelegramBot.User | undefined) {
+async function startTournament(chatId: number, initiator: TelegramBot.User | undefined, startTime?: string) {
     if (!initiator) return;
     
     // Check if there's already an active tournament
@@ -115,7 +118,13 @@ async function startTournament(chatId: number, initiator: TelegramBot.User | und
 
     const initiatorName = initiator.username ? `@${initiator.username}` : (initiator.first_name || 'Неизвестный');
     
-    const tournamentMessage = `🏆 **ТУРНИР НАЧАЛСЯ!** 🏆\n\nИнициатор: ${initiatorName}\n\n👥 **Участники:**\n_Пока никого нет_\n\n🎯 Нажмите кнопку ниже, чтобы присоединиться!`;
+    let tournamentMessage = `🏆 **ТУРНИР НАЧАЛСЯ!** 🏆\n\nИнициатор: ${initiatorName}`;
+    
+    if (startTime) {
+        tournamentMessage += `\n⏰ **Время начала:** ${startTime}`;
+    }
+    
+    tournamentMessage += `\n\n👥 **Участники:**\n_Пока никого нет_\n\n🎯 Нажмите кнопку ниже, чтобы присоединиться!`;
     
     const keyboard = {
         inline_keyboard: [
@@ -142,7 +151,8 @@ async function startTournament(chatId: number, initiator: TelegramBot.User | und
             participantNames: new Map<number, string>(),
             organizerId: initiator.id,
             organizerName: initiatorName,
-            gameState: 'registration'
+            gameState: 'registration',
+            startTime: startTime
         });
 
         // Update message to show current state
@@ -164,7 +174,13 @@ async function updateTournamentMessage(chatId: number, userId?: number) {
         ? Array.from(tournament.participantNames.values()).map((name, index) => `${index + 1}. ${name}`).join('\n')
         : '_Пока никого нет_';
 
-    let updatedMessage = `🏆 **ТУРНИР** 🏆\n\n👑 **Организатор:** ${tournament.organizerName}\n\n👥 **Участники (${tournament.participants.size}):**\n${participantsList}`;
+    let updatedMessage = `🏆 **ТУРНИР** 🏆\n\n👑 **Организатор:** ${tournament.organizerName}`;
+    
+    if (tournament.startTime) {
+        updatedMessage += `\n⏰ **Время начала:** ${tournament.startTime}`;
+    }
+    
+    updatedMessage += `\n\n👥 **Участники (${tournament.participants.size}):**\n${participantsList}`;
     
     // Add current round info if game is in progress
     if (tournament.gameState === 'playing' && tournament.bracket) {
@@ -215,7 +231,7 @@ async function updateTournamentMessage(chatId: number, userId?: number) {
             { text: '🚫 Отменить турнир', callback_data: 'cancel_tournament' }
         ]);
     } else if (tournament.gameState === 'playing') {
-        // Game in progress - only show dice button for current players
+        // Game in progress - only show dice button for current players and cancel button
         const currentRound = tournament.bracket!.rounds[tournament.currentRound!];
         const currentMatch = currentRound.matches[tournament.currentMatch!];
         
@@ -224,8 +240,11 @@ async function updateTournamentMessage(chatId: number, userId?: number) {
             buttons.push([{ text: '🎲 Кинуть кубик', callback_data: 'throw_dice' }]);
         }
         
-        // Always show cancel button
+        // Always show cancel button during playing
         buttons.push([{ text: '🚫 Отменить турнир', callback_data: 'cancel_tournament' }]);
+    } else if (tournament.gameState === 'finished' || tournament.gameState === 'cancelled') {
+        // Tournament finished or cancelled - no buttons
+        buttons.length = 0;
     }
     
     const keyboard = {
@@ -310,19 +329,22 @@ async function handleCancelTournament(chatId: number, userId: number) {
     const tournament = activeTournaments.get(chatId);
     if (!tournament) return;
 
-    // Check if tournament has already started
-    if (tournament.gameState === 'playing') {
-        return; // Can't cancel once game has started
+    // Only organizer can cancel
+    if (tournament.organizerId !== userId) {
+        return;
     }
 
-    // Remove tournament
-    activeTournaments.delete(chatId);
+    // Set tournament state to cancelled
+    tournament.gameState = 'cancelled';
     
     await bot.editMessageText('🚫 **ТУРНИР ОТМЕНЕН**\n\nТурнир был отменен организатором.', {
         chat_id: chatId,
         message_id: tournament.messageId,
         parse_mode: 'Markdown'
     });
+    
+    // Remove tournament after updating message
+    activeTournaments.delete(chatId);
     
     console.log(`Tournament cancelled in chat ${chatId} by user ${userId}`);
 }
@@ -748,13 +770,21 @@ async function finishTournament(chatId: number) {
     const finalMatch = finalRound.matches[0];
     const champion = finalMatch.winner;
 
+    // Set tournament state to finished
+    tournament.gameState = 'finished';
+    
+    // Update tournament message to remove buttons
+    await updateTournamentMessage(chatId);
+
     if (champion) {
         await bot.sendMessage(chatId, `🎉 **ТУРНИР ЗАВЕРШЕН!** 🎉\n\n👑 **ЧЕМПИОН: ${champion.name}!** 👑\n\nПоздравляем с победой! 🏆`, { parse_mode: 'Markdown' });
     }
 
-    // Clean up tournament
-    activeTournaments.delete(chatId);
-    console.log(`Tournament completed in chat ${chatId}`);
+    // Clean up tournament after a delay to allow message update
+    setTimeout(() => {
+        activeTournaments.delete(chatId);
+        console.log(`Tournament completed in chat ${chatId}`);
+    }, 1000);
 }
 
 // Handle polling errors
