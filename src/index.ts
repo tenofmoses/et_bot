@@ -212,7 +212,7 @@ async function updateTournamentMessage(chatId: number, userId?: number) {
     const buttons = [];
     
     if (tournament.gameState === 'registration') {
-        // Registration phase - show join/leave and start buttons
+        // Registration phase - show join/leave buttons for all users
         const firstRow = [];
         
         if (userId && tournament.participants.has(userId)) {
@@ -225,11 +225,13 @@ async function updateTournamentMessage(chatId: number, userId?: number) {
         
         buttons.push(firstRow);
         
-        // Second row with game controls
-        buttons.push([
-            { text: '🎲 Начать игру', callback_data: 'start_game' },
-            { text: '🚫 Отменить турнир', callback_data: 'cancel_tournament' }
-        ]);
+        // Second row with game controls - only for organizer
+        if (userId && userId === tournament.organizerId) {
+            buttons.push([
+                { text: '🎲 Начать игру', callback_data: 'start_game' },
+                { text: '🚫 Отменить турнир', callback_data: 'cancel_tournament' }
+            ]);
+        }
     } else if (tournament.gameState === 'playing') {
         // Game in progress - only show dice button for current players
         const currentRound = tournament.bracket!.rounds[tournament.currentRound!];
@@ -294,6 +296,12 @@ bot.on('callback_query', async (callbackQuery) => {
             const tournament = activeTournaments.get(chatId);
             if (!tournament) {
                 await bot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир не найден!' });
+                return;
+            }
+
+            // Only organizer can start the tournament
+            if (userId !== tournament.organizerId) {
+                await bot.answerCallbackQuery(callbackQuery.id, { text: 'Только организатор может начать турнир!' });
                 return;
             }
 
