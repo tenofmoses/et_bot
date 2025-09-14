@@ -166,9 +166,28 @@ async function updateTournamentMessage(chatId: number, userId?: number) {
 
     let updatedMessage = `🏆 **ТУРНИР** 🏆\n\n👑 **Организатор:** ${tournament.organizerName}\n\n👥 **Участники (${tournament.participants.size}):**\n${participantsList}`;
     
-    // Add tournament bracket if game is in progress
+    // Add current round info if game is in progress
     if (tournament.gameState === 'playing' && tournament.bracket) {
-        updatedMessage += '\n\n' + getBracketText(tournament);
+        const currentRound = tournament.bracket.rounds[tournament.currentRound!];
+        const currentMatch = currentRound.matches[tournament.currentMatch!];
+        
+        updatedMessage += `\n\n🎯 **Раунд ${tournament.currentRound! + 1}**\n`;
+        
+        if (!currentMatch.player2) {
+            updatedMessage += `${currentMatch.player1.name} (одиночный матч)`;
+        } else {
+            updatedMessage += `${currentMatch.player1.name} vs ${currentMatch.player2.name}`;
+        }
+        
+        if (currentMatch.player1.roll !== undefined || (currentMatch.player2 && currentMatch.player2.roll !== undefined)) {
+            updatedMessage += '\n\n📊 **Результаты:**\n';
+            if (currentMatch.player1.roll !== undefined) {
+                updatedMessage += `${currentMatch.player1.name}: ${currentMatch.player1.roll}\n`;
+            }
+            if (currentMatch.player2 && currentMatch.player2.roll !== undefined) {
+                updatedMessage += `${currentMatch.player2.name}: ${currentMatch.player2.roll}\n`;
+            }
+        }
     } else {
         updatedMessage += '\n\n🎯 Нажмите кнопку ниже, чтобы присоединиться или выйти!';
     }
@@ -426,9 +445,10 @@ function createTournamentBracket(participants: Map<number, string>): TournamentB
     return { rounds, totalRounds, byePlayer: byePlayer || undefined, byeRound };
 }
 
-// Function to get bracket text for display
-function getBracketText(tournament: Tournament): string {
-    if (!tournament.bracket) return '';
+// Function to send tournament bracket as separate message
+async function sendTournamentBracket(chatId: number) {
+    const tournament = activeTournaments.get(chatId);
+    if (!tournament || !tournament.bracket) return;
     
     let bracketText = '🏆 **ТУРНИРНАЯ СЕТКА** 🏆\n\n';
     
@@ -461,7 +481,7 @@ function getBracketText(tournament: Tournament): string {
         bracketText += '\n';
     });
     
-    return bracketText;
+    await bot.sendMessage(chatId, bracketText, { parse_mode: 'Markdown' });
 }
 
 // Function to start tournament bracket
@@ -475,8 +495,8 @@ async function startTournamentBracket(chatId: number) {
     tournament.currentMatch = 0;
     tournament.gameState = 'playing';
 
-    // Update main message with bracket and start first match
-    await updateTournamentMessage(chatId);
+    // Send tournament bracket as separate message and start first match
+    await sendTournamentBracket(chatId);
     await startNextMatch(chatId);
 }
 
@@ -713,6 +733,9 @@ async function advanceWinnersToNextRound(chatId: number) {
     if (shouldByePlayerJoin) {
         await bot.sendMessage(chatId, `🎯 **${tournament.bracket.byePlayer!.name}** присоединяется к турниру!`);
     }
+    
+    // Send updated bracket for new round
+    await sendTournamentBracket(chatId);
     await updateTournamentMessage(chatId);
 }
 
