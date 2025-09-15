@@ -82,11 +82,9 @@ bot.on('message', (msg) => {
         return;
     }
 
-    // Handle tournament trigger with optional time
-    if (messageText?.toLowerCase().includes('турнир')) {
-        const timeMatch = messageText.match(/(\d{1,2}):(\d{2})/);
-        const startTime = timeMatch ? timeMatch[0] : undefined;
-        startTournament(chatId, msg.from, startTime, msg.message_thread_id);
+    // Handle tournament trigger - only exact word "турнир" with no other words
+    if (messageText?.toLowerCase().trim() === 'турнир') {
+        startTournament(chatId, msg.from, undefined, msg.message_thread_id);
         return;
     }
 
