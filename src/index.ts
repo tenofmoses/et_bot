@@ -24,6 +24,69 @@ bot.on('polling_error', (error: any) => {
     }
 });
 
+// Utility function to send message with retry logic
+async function sendMessageWithRetry(chatId: number, text: string, options: any = {}, maxRetries: number = 3): Promise<any> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const result = await bot.sendMessage(chatId, text, options);
+            console.log(`[DEBUG] Message sent successfully on attempt ${attempt}`);
+            return result;
+        } catch (error: any) {
+            console.log(`[DEBUG] Message send attempt ${attempt} failed:`, error.message);
+            
+            if (error.response?.body?.error_code === 429) {
+                const retryAfter = error.response?.body?.parameters?.retry_after || 5;
+                console.log(`[DEBUG] Rate limited, waiting ${retryAfter} seconds before retry`);
+                await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+            } else if (attempt < maxRetries) {
+                // Exponential backoff for other errors
+                const delay = Math.pow(2, attempt) * 1000;
+                console.log(`[DEBUG] Waiting ${delay}ms before retry`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            } else {
+                console.error(`[ERROR] Failed to send message after ${maxRetries} attempts:`, error.message);
+                throw error;
+            }
+        }
+    }
+}
+
+// Utility function to edit message with retry logic
+async function editMessageWithRetry(chatId: number, messageId: number, text: string, options: any = {}, maxRetries: number = 3): Promise<any> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const result = await bot.editMessageText(text, {
+                chat_id: chatId,
+                message_id: messageId,
+                ...options
+            });
+            console.log(`[DEBUG] Message edited successfully on attempt ${attempt}`);
+            return result;
+        } catch (error: any) {
+            if (error.response?.body?.description?.includes('message is not modified')) {
+                console.log('[DEBUG] Message content unchanged, skipping update');
+                return null;
+            }
+            
+            console.log(`[DEBUG] Message edit attempt ${attempt} failed:`, error.message);
+            
+            if (error.response?.body?.error_code === 429) {
+                const retryAfter = error.response?.body?.parameters?.retry_after || 5;
+                console.log(`[DEBUG] Rate limited, waiting ${retryAfter} seconds before retry`);
+                await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+            } else if (attempt < maxRetries) {
+                // Exponential backoff for other errors
+                const delay = Math.pow(2, attempt) * 1000;
+                console.log(`[DEBUG] Waiting ${delay}ms before retry`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            } else {
+                console.error(`[ERROR] Failed to edit message after ${maxRetries} attempts:`, error.message);
+                throw error;
+            }
+        }
+    }
+}
+
 // Store active tournaments by chat ID
 interface Tournament {
     messageId: number;
@@ -112,7 +175,7 @@ async function startTournament(chatId: number, initiator: TelegramBot.User | und
     };
 
     try {
-        const sentMessage = await bot.sendMessage(chatId, tournamentMessage, {
+        const sentMessage = await sendMessageWithRetry(chatId, tournamentMessage, {
             reply_markup: keyboard,
             message_thread_id: messageThreadId
         });
@@ -248,23 +311,11 @@ async function updateTournamentMessage(chatId: number, userId?: number) {
     };
 
     try {
-        await bot.editMessageText(updatedMessage, {
-            chat_id: chatId,
-            message_id: tournament.messageId,
+        await editMessageWithRetry(chatId, tournament.messageId, updatedMessage, {
             reply_markup: keyboard
         });
     } catch (error: any) {
-        // Ignore "message is not modified" errors - they're harmless
-        if (error.response?.body?.description?.includes('message is not modified')) {
-            console.log('[DEBUG] Message content unchanged, skipping update');
-        } else if (error.response?.body?.error_code === 429) {
-            // Handle rate limiting - wait and don't crash
-            const retryAfter = error.response?.body?.parameters?.retry_after || 5;
-            console.log(`[DEBUG] Rate limited, waiting ${retryAfter} seconds`);
-            // Don't retry automatically to avoid infinite loops
-        } else {
-            console.error('Error updating tournament message:', error);
-        }
+        console.error('Error updating tournament message after retries:', error);
     }
 }
 
@@ -353,10 +404,7 @@ async function handleCancelTournament(chatId: number, userId: number) {
     // Set tournament state to cancelled
     tournament.gameState = 'cancelled';
     
-    await bot.editMessageText('🚫 ТУРНИР ОТМЕНЕН\n\nТурнир был отменен.', {
-        chat_id: chatId,
-        message_id: tournament.messageId
-    });
+    await editMessageWithRetry(chatId, tournament.messageId, '🚫 ТУРНИР ОТМЕНЕН\n\nТурнир был отменен.');
     
     // Remove tournament after updating message
     activeTournaments.delete(chatId);
@@ -546,7 +594,7 @@ async function sendTournamentBracket(chatId: number) {
         bracketText += '\n';
     });
     
-    await bot.sendMessage(chatId, bracketText, { 
+    await sendMessageWithRetry(chatId, bracketText, { 
         message_thread_id: tournament.messageThreadId
     });
 }
@@ -628,7 +676,7 @@ async function startNextMatch(chatId: number) {
             ]]
         };
 
-        await bot.sendMessage(chatId, matchText, {
+        await sendMessageWithRetry(chatId, matchText, {
             reply_markup: keyboard,
             message_thread_id: tournament.messageThreadId
         });
@@ -650,7 +698,7 @@ async function startNextMatch(chatId: number) {
         ]]
     };
 
-    await bot.sendMessage(chatId, matchText, {
+    await sendMessageWithRetry(chatId, matchText, {
         reply_markup: keyboard,
         message_thread_id: tournament.messageThreadId
     });
@@ -796,7 +844,7 @@ async function resolveMatch(chatId: number) {
                 ]]
             };
 
-            await bot.sendMessage(chatId, matchText, {
+            await sendMessageWithRetry(chatId, matchText, {
                 reply_markup: keyboard,
                 message_thread_id: tournament.messageThreadId
             });
@@ -807,7 +855,7 @@ async function resolveMatch(chatId: number) {
     currentMatch.winner = winner;
     currentMatch.completed = true;
 
-    await bot.sendMessage(chatId, `🏆 ПОБЕДИТЕЛЬ МАТЧА: ${winner.name}!\n\n${currentMatch.player1.name}: ${roll1}\n${currentMatch.player2!.name}: ${roll2}`, {
+    await sendMessageWithRetry(chatId, `🏆 ПОБЕДИТЕЛЬ МАТЧА: ${winner.name}!\n\n${currentMatch.player1.name}: ${roll1}\n${currentMatch.player2!.name}: ${roll2}`, {
         message_thread_id: tournament.messageThreadId
     });
 
@@ -879,7 +927,7 @@ async function advanceWinnersToNextRound(chatId: number) {
     }
 
     try {
-        await bot.sendMessage(chatId, `🔄 ПЕРЕХОД К РАУНДУ ${tournament.currentRound! + 1}`, {
+        await sendMessageWithRetry(chatId, `🔄 ПЕРЕХОД К РАУНДУ ${tournament.currentRound! + 1}`, {
             message_thread_id: tournament.messageThreadId
         });
         
@@ -887,7 +935,7 @@ async function advanceWinnersToNextRound(chatId: number) {
         await new Promise(resolve => setTimeout(resolve, 1000));
         
         if (shouldByePlayerJoin) {
-            await bot.sendMessage(chatId, `🎯 ${tournament.bracket.byePlayer!.name} присоединяется к турниру!`, {
+            await sendMessageWithRetry(chatId, `🎯 ${tournament.bracket.byePlayer!.name} присоединяется к турниру!`, {
                 message_thread_id: tournament.messageThreadId
             });
             await new Promise(resolve => setTimeout(resolve, 1000));
