@@ -799,7 +799,22 @@ async function advanceWinnersToNextRound(chatId: number) {
         winners.push(tournament.bracket.byePlayer!);
     }
     
-    // Fill matches with winners
+    console.log(`[DEBUG] Advancing ${winners.length} winners to round ${tournament.currentRound! + 1}`);
+    console.log(`[DEBUG] Current round has ${currentRound.matches.length} matches`);
+    
+    // If odd number of winners, one gets a bye to the next round
+    if (winners.length % 2 === 1 && winners.length > 1) {
+        const byePlayer = winners.pop()!; // Last winner gets bye
+        console.log(`[DEBUG] ${byePlayer.name} gets bye to next round`);
+        
+        // Store bye player info for next round
+        if (!tournament.bracket.byePlayer) {
+            tournament.bracket.byePlayer = byePlayer;
+            tournament.bracket.byeRound = tournament.currentRound! + 1;
+        }
+    }
+    
+    // Fill matches with remaining winners
     for (let i = 0; i < currentRound.matches.length; i++) {
         const match = currentRound.matches[i];
         
@@ -811,6 +826,9 @@ async function advanceWinnersToNextRound(chatId: number) {
         if (winnerIndex < winners.length && winners[winnerIndex]) {
             match.player2 = { id: winners[winnerIndex]!.id, name: winners[winnerIndex]!.name };
             winnerIndex++;
+        } else if (match.player1 && !match.player2) {
+            // If only one player in match, they get a bye
+            match.player2 = { id: -1, name: 'БАЙ', roll: undefined };
         }
     }
 
@@ -826,6 +844,9 @@ async function advanceWinnersToNextRound(chatId: number) {
     // Send updated bracket for new round
     await sendTournamentBracket(chatId);
     await updateTournamentMessage(chatId);
+    
+    // Start first match of new round
+    setTimeout(() => startNextMatch(chatId), 1000);
 }
 
 // Function to finish tournament
