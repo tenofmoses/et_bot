@@ -399,34 +399,50 @@ function createTournamentBracket(participants: Map<number, string>): TournamentB
         };
     }
     
-    // Calculate total rounds needed
-    const totalRounds = Math.ceil(Math.log2(playerList.length));
-    const rounds: Round[] = [];
-    
-    // Determine bye player and which round they join
-    let byePlayer = null;
-    let byeRound = -1;
-    
-    if (playerList.length % 2 === 1) {
-        byePlayer = playerList[playerList.length - 1];
+    // For even number of players, no bye needed
+    if (playerList.length % 2 === 0) {
+        const totalRounds = Math.ceil(Math.log2(playerList.length));
+        const rounds: Round[] = [];
         
-        // Calculate which round the bye player should join
-        // Find the round where there will be an odd number of winners
-        let currentPlayers = playerList.length - 1; // Exclude bye player
-        byeRound = 0;
-        
-        while (currentPlayers > 1) {
-            currentPlayers = Math.floor(currentPlayers / 2);
-            byeRound++;
-            if (currentPlayers % 2 === 1) {
-                break;
-            }
+        // Create first round matches
+        const firstRoundMatches: Match[] = [];
+        for (let i = 0; i < playerList.length; i += 2) {
+            firstRoundMatches.push({
+                player1: { id: playerList[i].id, name: playerList[i].name },
+                player2: { id: playerList[i + 1].id, name: playerList[i + 1].name },
+                completed: false
+            });
         }
+        rounds.push({ matches: firstRoundMatches });
+        
+        // Create subsequent rounds
+        let currentMatches = firstRoundMatches.length;
+        for (let round = 1; round < totalRounds; round++) {
+            currentMatches = Math.ceil(currentMatches / 2);
+            const matches: Match[] = [];
+            
+            for (let i = 0; i < currentMatches; i++) {
+                matches.push({
+                    player1: { id: -1, name: 'TBD' },
+                    player2: { id: -1, name: 'TBD' },
+                    completed: false
+                });
+            }
+            rounds.push({ matches });
+        }
+        
+        return { rounds, totalRounds, byePlayer: undefined, byeRound: -1 };
     }
     
-    // Create first round matches (excluding bye player)
+    // For odd number of players, calculate bye logic
+    // The bye player should join when there's an odd number of winners that need to be paired
+    const totalRounds = Math.ceil(Math.log2(playerList.length));
+    const rounds: Round[] = [];
+    const byePlayer = playerList[playerList.length - 1];
+    
+    // Create first round with even number of players (exclude bye player)
     const firstRoundMatches: Match[] = [];
-    const playersInFirstRound = byePlayer ? playerList.length - 1 : playerList.length;
+    const playersInFirstRound = playerList.length - 1; // Exclude bye player
     
     for (let i = 0; i < playersInFirstRound; i += 2) {
         firstRoundMatches.push({
@@ -435,23 +451,34 @@ function createTournamentBracket(participants: Map<number, string>): TournamentB
             completed: false
         });
     }
-    
     rounds.push({ matches: firstRoundMatches });
     
-    // Create subsequent rounds
+    // Calculate when bye player should join
+    let winnersCount = firstRoundMatches.length; // Winners from first round
+    let byeRound = -1;
+    
+    // Find the round where adding the bye player creates an even number for pairing
     for (let round = 1; round < totalRounds; round++) {
-        const prevRoundMatches = rounds[round - 1].matches.length;
-        let winnersFromPrevRound = prevRoundMatches;
-        
+        if ((winnersCount + 1) % 2 === 0) {
+            // Adding bye player makes even number - this is the round
+            byeRound = round;
+            break;
+        }
+        winnersCount = Math.ceil(winnersCount / 2);
+    }
+    
+    // Create subsequent rounds
+    let currentWinners = firstRoundMatches.length;
+    for (let round = 1; round < totalRounds; round++) {
         // Add bye player if this is their round
-        if (round === byeRound && byePlayer) {
-            winnersFromPrevRound += 1;
+        if (round === byeRound) {
+            currentWinners += 1;
         }
         
-        const thisRoundMatches = Math.ceil(winnersFromPrevRound / 2);
+        const matchesInRound = Math.ceil(currentWinners / 2);
         const matches: Match[] = [];
         
-        for (let i = 0; i < thisRoundMatches; i++) {
+        for (let i = 0; i < matchesInRound; i++) {
             matches.push({
                 player1: { id: -1, name: 'TBD' },
                 player2: { id: -1, name: 'TBD' },
@@ -460,9 +487,10 @@ function createTournamentBracket(participants: Map<number, string>): TournamentB
         }
         
         rounds.push({ matches });
+        currentWinners = matchesInRound; // Winners from this round
     }
     
-    return { rounds, totalRounds, byePlayer: byePlayer || undefined, byeRound };
+    return { rounds, totalRounds, byePlayer, byeRound };
 }
 
 // Function to send tournament bracket as separate message
@@ -788,53 +816,46 @@ async function advanceWinnersToNextRound(chatId: number) {
     const currentRound = tournament.bracket.rounds[tournament.currentRound!];
     const winners = prevRound.matches.map(match => match.winner).filter(winner => winner !== undefined);
 
-    let winnerIndex = 0;
-    let matchIndex = 0;
+    console.log(`[DEBUG] Advancing ${winners.length} winners to round ${tournament.currentRound! + 1}`);
+    console.log(`[DEBUG] Current round has ${currentRound.matches.length} matches`);
+    console.log(`[DEBUG] Bye player should join in round: ${tournament.bracket.byeRound}, current round: ${tournament.currentRound}`);
     
     // Check if bye player should join this round
     const shouldByePlayerJoin = tournament.currentRound === tournament.bracket.byeRound && tournament.bracket.byePlayer;
     
+    let playersToPlace = [...winners];
     if (shouldByePlayerJoin) {
-        // Add bye player to the list of "winners"
-        winners.push(tournament.bracket.byePlayer!);
+        playersToPlace.push(tournament.bracket.byePlayer!);
+        console.log(`[DEBUG] Adding bye player ${tournament.bracket.byePlayer!.name} to round ${tournament.currentRound! + 1}`);
     }
     
-    console.log(`[DEBUG] Advancing ${winners.length} winners to round ${tournament.currentRound! + 1}`);
-    console.log(`[DEBUG] Current round has ${currentRound.matches.length} matches`);
+    console.log(`[DEBUG] Total players to place: ${playersToPlace.length}`);
     
-    // If odd number of winners, one gets a bye to the next round
-    if (winners.length % 2 === 1 && winners.length > 1) {
-        const byePlayer = winners.pop()!; // Last winner gets bye
-        console.log(`[DEBUG] ${byePlayer.name} gets bye to next round`);
-        
-        // Store bye player info for next round
-        if (!tournament.bracket.byePlayer) {
-            tournament.bracket.byePlayer = byePlayer;
-            tournament.bracket.byeRound = tournament.currentRound! + 1;
-        }
-    }
-    
-    // Fill matches with remaining winners
+    // Fill matches with players
+    let playerIndex = 0;
     for (let i = 0; i < currentRound.matches.length; i++) {
         const match = currentRound.matches[i];
         
-        if (winnerIndex < winners.length && winners[winnerIndex]) {
-            match.player1 = { id: winners[winnerIndex]!.id, name: winners[winnerIndex]!.name };
-            winnerIndex++;
+        if (playerIndex < playersToPlace.length) {
+            match.player1 = { id: playersToPlace[playerIndex].id, name: playersToPlace[playerIndex].name };
+            playerIndex++;
         }
         
-        if (winnerIndex < winners.length && winners[winnerIndex]) {
-            match.player2 = { id: winners[winnerIndex]!.id, name: winners[winnerIndex]!.name };
-            winnerIndex++;
+        if (playerIndex < playersToPlace.length) {
+            match.player2 = { id: playersToPlace[playerIndex].id, name: playersToPlace[playerIndex].name };
+            playerIndex++;
         } else if (match.player1 && !match.player2) {
-            // If only one player in match, they get a bye
-            match.player2 = { id: -1, name: 'БАЙ', roll: undefined };
+            // If only one player in match, they automatically advance
+            match.player2 = null;
         }
+        
+        console.log(`[DEBUG] Match ${i + 1}: ${match.player1?.name || 'TBD'} vs ${match.player2?.name || 'single player'}`);
     }
 
     await bot.sendMessage(chatId, `🔄 ПЕРЕХОД К РАУНДУ ${tournament.currentRound! + 1}`, {
         message_thread_id: tournament.messageThreadId
     });
+    
     if (shouldByePlayerJoin) {
         await bot.sendMessage(chatId, `🎯 ${tournament.bracket.byePlayer!.name} присоединяется к турниру!`, {
             message_thread_id: tournament.messageThreadId
