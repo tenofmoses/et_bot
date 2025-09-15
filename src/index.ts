@@ -937,8 +937,8 @@ async function advanceWinnersToNextRound(chatId: number) {
             match.player2 = null;
         }
         
-        // Skip empty matches that shouldn't exist
-        if (!match.player1 || match.player1.name === 'TBD') {
+        // Clear matches that have no real players assigned
+        if (playerIndex >= playersToPlace.length && (!match.player1 || match.player1.name === 'TBD')) {
             match.player1 = { id: -1, name: 'TBD' };
             match.player2 = { id: -1, name: 'TBD' };
         }
