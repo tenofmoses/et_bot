@@ -812,6 +812,13 @@ async function advanceWinnersToNextRound(chatId: number) {
     const tournament = activeTournaments.get(chatId);
     if (!tournament || !tournament.bracket) return;
 
+    // Check if we're trying to advance beyond the last round
+    if (tournament.currentRound! >= tournament.bracket.totalRounds) {
+        console.log(`[DEBUG] Tournament completed - no more rounds to advance to`);
+        await finishTournament(chatId);
+        return;
+    }
+
     const prevRound = tournament.bracket.rounds[tournament.currentRound! - 1];
     const currentRound = tournament.bracket.rounds[tournament.currentRound!];
     const winners = prevRound.matches.map(match => match.winner).filter(winner => winner !== undefined);
@@ -858,22 +865,34 @@ async function advanceWinnersToNextRound(chatId: number) {
         console.log(`[DEBUG] Match ${i + 1}: ${match.player1?.name || 'TBD'} vs ${match.player2?.name || 'single player'}`);
     }
 
-    await bot.sendMessage(chatId, `🔄 ПЕРЕХОД К РАУНДУ ${tournament.currentRound! + 1}`, {
-        message_thread_id: tournament.messageThreadId
-    });
-    
-    if (shouldByePlayerJoin) {
-        await bot.sendMessage(chatId, `🎯 ${tournament.bracket.byePlayer!.name} присоединяется к турниру!`, {
+    try {
+        await bot.sendMessage(chatId, `🔄 ПЕРЕХОД К РАУНДУ ${tournament.currentRound! + 1}`, {
             message_thread_id: tournament.messageThreadId
         });
+        
+        // Add delay to prevent rate limiting
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        if (shouldByePlayerJoin) {
+            await bot.sendMessage(chatId, `🎯 ${tournament.bracket.byePlayer!.name} присоединяется к турниру!`, {
+                message_thread_id: tournament.messageThreadId
+            });
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        
+        // Send updated bracket for new round
+        await sendTournamentBracket(chatId);
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        await updateTournamentMessage(chatId);
+        
+        // Start first match of new round
+        setTimeout(() => startNextMatch(chatId), 1000);
+    } catch (error) {
+        console.error('Error in advanceWinnersToNextRound:', error);
+        // Continue with tournament progression even if some messages fail
+        setTimeout(() => startNextMatch(chatId), 2000);
     }
-    
-    // Send updated bracket for new round
-    await sendTournamentBracket(chatId);
-    await updateTournamentMessage(chatId);
-    
-    // Start first match of new round
-    setTimeout(() => startNextMatch(chatId), 1000);
 }
 
 // Function to finish tournament
