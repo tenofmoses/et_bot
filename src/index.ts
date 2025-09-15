@@ -243,8 +243,13 @@ async function updateTournamentMessage(chatId: number, userId?: number) {
             message_id: tournament.messageId,
             reply_markup: keyboard
         });
-    } catch (error) {
-        console.error('Error updating tournament message:', error);
+    } catch (error: any) {
+        // Ignore "message is not modified" errors - they're harmless
+        if (error.response?.body?.description?.includes('message is not modified')) {
+            console.log('[DEBUG] Message content unchanged, skipping update');
+        } else {
+            console.error('Error updating tournament message:', error);
+        }
     }
 }
 
