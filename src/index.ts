@@ -838,14 +838,18 @@ async function advanceWinnersToNextRound(chatId: number) {
         
         if (playerIndex < playersToPlace.length && playersToPlace[playerIndex]) {
             const player1 = playersToPlace[playerIndex];
-            match.player1 = { id: player1.id, name: player1.name };
-            playerIndex++;
+            if (player1) {
+                match.player1 = { id: player1.id, name: player1.name };
+                playerIndex++;
+            }
         }
         
         if (playerIndex < playersToPlace.length && playersToPlace[playerIndex]) {
             const player2 = playersToPlace[playerIndex];
-            match.player2 = { id: player2.id, name: player2.name };
-            playerIndex++;
+            if (player2) {
+                match.player2 = { id: player2.id, name: player2.name };
+                playerIndex++;
+            }
         } else if (match.player1 && !match.player2) {
             // If only one player in match, they automatically advance
             match.player2 = null;
