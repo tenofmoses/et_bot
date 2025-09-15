@@ -464,90 +464,66 @@ function createTournamentBracket(participants: Map<number, string>): TournamentB
         };
     }
     
-    // Universal bracket logic that handles both even and odd scenarios
-    const totalRounds = Math.ceil(Math.log2(playerList.length));
+    // Simple single-elimination tournament logic
+    // Each match eliminates exactly 1 player, so we need (playerCount - 1) total matches
     const rounds: Round[] = [];
+    let currentPlayers = playerList.length;
+    let roundNumber = 0;
     
-    // Determine if we need a bye player
-    let needsByePlayer = false;
-    let byePlayer: { id: number; name: string } | undefined = undefined;
-    let currentPlayerCount = playerList.length;
-    
-    // Check if any round will have odd number of winners
-    let tempWinners = Math.floor(playerList.length / 2);
-    while (tempWinners > 1) {
-        if (tempWinners % 2 === 1) {
-            needsByePlayer = true;
-            break;
-        }
-        tempWinners = Math.floor(tempWinners / 2);
-    }
-    
-    // If odd number of players OR even players that create odd winners, use bye
-    if (playerList.length % 2 === 1 || needsByePlayer) {
-        byePlayer = playerList[playerList.length - 1];
-        currentPlayerCount = playerList.length - 1;
-        console.log(`[DEBUG] Using bye player: ${byePlayer.name}`);
-        
-        // Ensure even number of players for first round
-        if (currentPlayerCount % 2 === 1) {
-            // If we still have odd number after removing bye player, remove one more
-            currentPlayerCount = currentPlayerCount - 1;
-            console.log(`[DEBUG] Adjusted to ${currentPlayerCount} players for even first round`);
-        }
-    }
-    
-    // Create first round with guaranteed even number of players
-    const firstRoundMatchesArray: Match[] = [];
-    for (let i = 0; i < currentPlayerCount; i += 2) {
-        firstRoundMatchesArray.push({
-            player1: { id: playerList[i].id, name: playerList[i].name },
-            player2: { id: playerList[i + 1].id, name: playerList[i + 1].name },
-            completed: false
-        });
-    }
-    rounds.push({ matches: firstRoundMatchesArray });
-    
-    // Calculate when bye player should join (if needed)
-    let byeRound = -1;
-    if (byePlayer) {
-        let winnersCount = firstRoundMatchesArray.length; // Winners from first round
-        
-        // Find the round where adding the bye player creates an even number for pairing
-        for (let round = 1; round < totalRounds; round++) {
-            if ((winnersCount + 1) % 2 === 0) {
-                // Adding bye player makes even number - this is the round
-                byeRound = round;
-                break;
-            }
-            winnersCount = Math.ceil(winnersCount / 2);
-        }
-    }
-    
-    // Create subsequent rounds
-    let currentWinners = firstRoundMatchesArray.length;
-    for (let round = 1; round < totalRounds; round++) {
-        // Add bye player if this is their round
-        if (round === byeRound) {
-            currentWinners += 1;
-        }
-        
-        const matchesInRound = Math.ceil(currentWinners / 2);
+    // Create all rounds until we have a winner
+    while (currentPlayers > 1) {
         const matches: Match[] = [];
+        let matchesThisRound;
         
-        for (let i = 0; i < matchesInRound; i++) {
-            matches.push({
-                player1: { id: -1, name: 'TBD' },
-                player2: { id: -1, name: 'TBD' },
-                completed: false
-            });
+        if (currentPlayers % 2 === 0) {
+            // Even number of players - all play
+            matchesThisRound = currentPlayers / 2;
+        } else {
+            // Odd number of players - one gets bye
+            matchesThisRound = Math.floor(currentPlayers / 2);
+        }
+        
+        // Create matches for this round
+        for (let i = 0; i < matchesThisRound; i++) {
+            if (roundNumber === 0) {
+                // First round - assign real players
+                const player1Index = i * 2;
+                const player2Index = i * 2 + 1;
+                
+                if (player1Index < playerList.length && player2Index < playerList.length) {
+                    matches.push({
+                        player1: { id: playerList[player1Index].id, name: playerList[player1Index].name },
+                        player2: { id: playerList[player2Index].id, name: playerList[player2Index].name },
+                        completed: false
+                    });
+                }
+            } else {
+                // Subsequent rounds - TBD players
+                matches.push({
+                    player1: { id: -1, name: 'TBD' },
+                    player2: { id: -1, name: 'TBD' },
+                    completed: false
+                });
+            }
         }
         
         rounds.push({ matches });
-        currentWinners = matchesInRound; // Winners from this round
+        
+        // Calculate players for next round
+        const winners = matchesThisRound;
+        const byePlayers = currentPlayers % 2; // 0 or 1
+        currentPlayers = winners + byePlayers;
+        roundNumber++;
     }
     
-    return { rounds, totalRounds, byePlayer, byeRound };
+    console.log(`[DEBUG] Created ${rounds.length} rounds for ${playerList.length} players`);
+    
+    return { 
+        rounds, 
+        totalRounds: rounds.length, 
+        byePlayer: undefined, 
+        byeRound: -1 
+    };
 }
 
 // Function to send tournament bracket as separate message
