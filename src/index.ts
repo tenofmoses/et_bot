@@ -103,7 +103,6 @@ async function startTournament(chatId: number, initiator: TelegramBot.User | und
 
     try {
         const sentMessage = await bot.sendMessage(chatId, tournamentMessage, {
-            parse_mode: 'Markdown',
             reply_markup: keyboard,
             message_thread_id: messageThreadId
         });
@@ -242,7 +241,6 @@ async function updateTournamentMessage(chatId: number, userId?: number) {
         await bot.editMessageText(updatedMessage, {
             chat_id: chatId,
             message_id: tournament.messageId,
-            parse_mode: 'Markdown',
             reply_markup: keyboard
         });
     } catch (error) {
@@ -337,8 +335,7 @@ async function handleCancelTournament(chatId: number, userId: number) {
     
     await bot.editMessageText('🚫 ТУРНИР ОТМЕНЕН\n\nТурнир был отменен.', {
         chat_id: chatId,
-        message_id: tournament.messageId,
-        parse_mode: 'Markdown'
+        message_id: tournament.messageId
     });
     
     // Remove tournament after updating message
@@ -530,7 +527,6 @@ async function sendTournamentBracket(chatId: number) {
     });
     
     await bot.sendMessage(chatId, bracketText, { 
-        parse_mode: 'Markdown',
         message_thread_id: tournament.messageThreadId
     });
 }
@@ -613,7 +609,6 @@ async function startNextMatch(chatId: number) {
         };
 
         await bot.sendMessage(chatId, matchText, {
-            parse_mode: 'Markdown',
             reply_markup: keyboard,
             message_thread_id: tournament.messageThreadId
         });
@@ -636,7 +631,6 @@ async function startNextMatch(chatId: number) {
     };
 
     await bot.sendMessage(chatId, matchText, {
-        parse_mode: 'Markdown',
         reply_markup: keyboard,
         message_thread_id: tournament.messageThreadId
     });
@@ -783,7 +777,6 @@ async function resolveMatch(chatId: number) {
             };
 
             await bot.sendMessage(chatId, matchText, {
-                parse_mode: 'Markdown',
                 reply_markup: keyboard,
                 message_thread_id: tournament.messageThreadId
             });
