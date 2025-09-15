@@ -14,6 +14,16 @@ if (!token) {
 // Create a bot that uses 'polling' to fetch new updates
 const bot = new TelegramBot(token, { polling: true });
 
+// Handle polling errors to prevent crashes
+bot.on('polling_error', (error: any) => {
+    if (error.code === 'ETELEGRAM' && error.response?.body?.error_code === 409) {
+        console.log('[DEBUG] Multiple bot instances detected, stopping this instance');
+        process.exit(0);
+    } else {
+        console.error('Polling error:', error.message);
+    }
+});
+
 // Store active tournaments by chat ID
 interface Tournament {
     messageId: number;
@@ -247,6 +257,11 @@ async function updateTournamentMessage(chatId: number, userId?: number) {
         // Ignore "message is not modified" errors - they're harmless
         if (error.response?.body?.description?.includes('message is not modified')) {
             console.log('[DEBUG] Message content unchanged, skipping update');
+        } else if (error.response?.body?.error_code === 429) {
+            // Handle rate limiting - wait and don't crash
+            const retryAfter = error.response?.body?.parameters?.retry_after || 5;
+            console.log(`[DEBUG] Rate limited, waiting ${retryAfter} seconds`);
+            // Don't retry automatically to avoid infinite loops
         } else {
             console.error('Error updating tournament message:', error);
         }
@@ -869,27 +884,33 @@ async function advanceWinnersToNextRound(chatId: number) {
         });
         
         // Add delay to prevent rate limiting
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
         if (shouldByePlayerJoin) {
             await bot.sendMessage(chatId, `🎯 ${tournament.bracket.byePlayer!.name} присоединяется к турниру!`, {
                 message_thread_id: tournament.messageThreadId
             });
-            await new Promise(resolve => setTimeout(resolve, 500));
+            await new Promise(resolve => setTimeout(resolve, 1000));
         }
         
         // Send updated bracket for new round
         await sendTournamentBracket(chatId);
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
         await updateTournamentMessage(chatId);
         
         // Start first match of new round
         setTimeout(() => startNextMatch(chatId), 1000);
-    } catch (error) {
-        console.error('Error in advanceWinnersToNextRound:', error);
-        // Continue with tournament progression even if some messages fail
-        setTimeout(() => startNextMatch(chatId), 2000);
+    } catch (error: any) {
+        if (error.response?.body?.error_code === 429) {
+            const retryAfter = error.response?.body?.parameters?.retry_after || 10;
+            console.log(`[DEBUG] Rate limited in advanceWinnersToNextRound, waiting ${retryAfter} seconds`);
+            setTimeout(() => startNextMatch(chatId), (retryAfter + 2) * 1000);
+        } else {
+            console.error('Error in advanceWinnersToNextRound:', error);
+            // Continue with tournament progression even if some messages fail
+            setTimeout(() => startNextMatch(chatId), 3000);
+        }
     }
 }
 
