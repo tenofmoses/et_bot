@@ -899,8 +899,22 @@ async function advanceWinnersToNextRound(chatId: number) {
     
     console.log(`[DEBUG] Total players to place: ${playersToPlace.length}`);
     
-    // Fill matches with players
+    // Fill matches with players - handle odd numbers properly
     let playerIndex = 0;
+    
+    // If odd number of players, one gets a bye (skip to next round)
+    if (playersToPlace.length % 2 === 1) {
+        const byePlayer = playersToPlace.pop()!; // Remove last player for bye
+        console.log(`[DEBUG] ${byePlayer.name} gets bye to next round due to odd number of players`);
+        
+        // Store bye player for next round if not already set
+        if (!tournament.bracket.byePlayer || tournament.bracket.byeRound !== tournament.currentRound! + 1) {
+            tournament.bracket.byePlayer = byePlayer;
+            tournament.bracket.byeRound = tournament.currentRound! + 1;
+        }
+    }
+    
+    // Fill matches with remaining players (now even number)
     for (let i = 0; i < currentRound.matches.length; i++) {
         const match = currentRound.matches[i];
         
@@ -921,6 +935,12 @@ async function advanceWinnersToNextRound(chatId: number) {
         } else if (match.player1 && !match.player2) {
             // If only one player in match, they automatically advance
             match.player2 = null;
+        }
+        
+        // Skip empty matches that shouldn't exist
+        if (!match.player1 || match.player1.name === 'TBD') {
+            match.player1 = { id: -1, name: 'TBD' };
+            match.player2 = { id: -1, name: 'TBD' };
         }
         
         console.log(`[DEBUG] Match ${i + 1}: ${match.player1?.name || 'TBD'} vs ${match.player2?.name || 'single player'}`);
