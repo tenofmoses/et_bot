@@ -17,8 +17,14 @@ const bot = new TelegramBot(token, { polling: true });
 // Handle polling errors to prevent crashes
 bot.on('polling_error', (error: any) => {
     if (error.code === 'ETELEGRAM' && error.response?.body?.error_code === 409) {
-        console.log('[DEBUG] Multiple bot instances detected, stopping this instance');
-        process.exit(0);
+        console.log('[DEBUG] Multiple bot instances detected, will retry in 5 seconds');
+        // Instead of exiting, wait and retry
+        setTimeout(() => {
+            bot.stopPolling();
+            setTimeout(() => {
+                bot.startPolling();
+            }, 1000);
+        }, 5000);
     } else {
         console.error('Polling error:', error.message);
     }

@@ -26,6 +26,9 @@ RUN pnpm run build
 # Remove dev dependencies to reduce image size
 RUN pnpm prune --prod
 
+# Install curl for healthcheck (before switching to non-root user)
+RUN apk add --no-cache curl
+
 # Create non-root user for security
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S botuser -u 1001
@@ -38,8 +41,8 @@ USER botuser
 EXPOSE 3000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD node -e "console.log('Bot is running')" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD pgrep -f "node dist/index.js" > /dev/null || exit 1
 
 # Start the bot
 CMD ["pnpm", "start"]
