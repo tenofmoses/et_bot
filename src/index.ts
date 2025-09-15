@@ -17,6 +17,7 @@ const bot = new TelegramBot(token, { polling: true });
 // Store active tournaments by chat ID
 interface Tournament {
     messageId: number;
+    messageThreadId?: number;
     participants: Set<number>;
     participantNames: Map<number, string>;
     organizerId: number;
@@ -63,7 +64,9 @@ bot.on('message', (msg) => {
             ? '🎲 Привет! Я бот для игры в кубики и турниров!\n\nИспользуй команды:\n/dice - бросить кубик\n/help - показать помощь\n\nДобавь меня в группу и напиши "турнир" чтобы начать турнир!'
             : '🎲 Привет! Я готов к турнирам!\n\nНапишите "турнир" чтобы начать турнир с участниками группы!';
         
-        bot.sendMessage(chatId, welcomeText);
+        bot.sendMessage(chatId, welcomeText, {
+            message_thread_id: msg.message_thread_id
+        });
         return;
     }
 
@@ -73,7 +76,9 @@ bot.on('message', (msg) => {
             ? '🎲 Доступные команды:\n\n/dice - бросить кубик (1-6)\n/start - начать работу с ботом\n/help - показать эту справку\n\nВ группах:\n"турнир" - начать турнир'
             : '🎲 Доступные команды в группе:\n\n/dice - бросить кубик\n"турнир" - начать турнир\n/help - показать эту справку';
         
-        bot.sendMessage(chatId, helpText);
+        bot.sendMessage(chatId, helpText, {
+            message_thread_id: msg.message_thread_id
+        });
         return;
     }
 
@@ -81,38 +86,47 @@ bot.on('message', (msg) => {
     if (messageText?.toLowerCase().includes('турнир')) {
         const timeMatch = messageText.match(/(\d{1,2}):(\d{2})/);
         const startTime = timeMatch ? timeMatch[0] : undefined;
-        startTournament(chatId, msg.from, startTime);
+        startTournament(chatId, msg.from, startTime, msg.message_thread_id);
         return;
     }
 
     // Handle /dice command
     if (messageText === '/dice') {
         // Send dice emoji using Telegram's built-in dice feature
-        bot.sendDice(chatId, { emoji: '🎲' })
+        bot.sendDice(chatId, { 
+            emoji: '🎲',
+            message_thread_id: msg.message_thread_id
+        })
             .then(() => {
                 console.log(`Sent dice to chat ${chatId}`);
             })
             .catch((error) => {
                 console.error('Error sending dice:', error);
-                bot.sendMessage(chatId, '❌ Произошла ошибка при броске кубика');
+                bot.sendMessage(chatId, '❌ Произошла ошибка при броске кубика', {
+                    message_thread_id: msg.message_thread_id
+                });
             });
         return;
     }
 
     // Handle unknown commands
     if (messageText?.startsWith('/')) {
-        bot.sendMessage(chatId, ' Неизвестная команда. Используй /help для списка доступных команд.');
+        bot.sendMessage(chatId, ' Неизвестная команда. Используй /help для списка доступных команд.', {
+            message_thread_id: msg.message_thread_id
+        });
         return;
     }
 });
 
 // Function to start a tournament
-async function startTournament(chatId: number, initiator: TelegramBot.User | undefined, startTime?: string) {
+async function startTournament(chatId: number, initiator: TelegramBot.User | undefined, startTime?: string, messageThreadId?: number) {
     if (!initiator) return;
     
     // Check if there's already an active tournament
     if (activeTournaments.has(chatId)) {
-        bot.sendMessage(chatId, ' В этом чате уже идет турнир! Дождитесь его завершения.');
+        bot.sendMessage(chatId, ' В этом чате уже идет турнир! Дождитесь его завершения.', {
+            message_thread_id: messageThreadId
+        });
         return;
     }
 
@@ -143,12 +157,14 @@ async function startTournament(chatId: number, initiator: TelegramBot.User | und
     try {
         const sentMessage = await bot.sendMessage(chatId, tournamentMessage, {
             parse_mode: 'Markdown',
-            reply_markup: keyboard
+            reply_markup: keyboard,
+            message_thread_id: messageThreadId
         });
 
         // Store tournament data without organizer as participant
         activeTournaments.set(chatId, {
             messageId: sentMessage.message_id,
+            messageThreadId: messageThreadId,
             participants: new Set<number>(),
             participantNames: new Map<number, string>(),
             organizerId: initiator.id,
@@ -162,7 +178,9 @@ async function startTournament(chatId: number, initiator: TelegramBot.User | und
         console.log(`Tournament started in chat ${chatId} by ${initiatorName}`);
     } catch (error) {
         console.error('Error starting tournament:', error);
-        bot.sendMessage(chatId, '❌ Произошла ошибка при создании турнира');
+        bot.sendMessage(chatId, '❌ Произошла ошибка при создании турнира', {
+            message_thread_id: messageThreadId
+        });
     }
 }
 
@@ -528,7 +546,10 @@ async function sendTournamentBracket(chatId: number) {
         bracketText += '\n';
     });
     
-    await bot.sendMessage(chatId, bracketText, { parse_mode: 'Markdown' });
+    await bot.sendMessage(chatId, bracketText, { 
+        parse_mode: 'Markdown',
+        message_thread_id: tournament.messageThreadId
+    });
 }
 
 // Function to start tournament bracket
@@ -599,7 +620,8 @@ async function startNextMatch(chatId: number) {
 
         await bot.sendMessage(chatId, matchText, {
             parse_mode: 'Markdown',
-            reply_markup: keyboard
+            reply_markup: keyboard,
+            message_thread_id: tournament.messageThreadId
         });
         return;
     }
@@ -621,7 +643,8 @@ async function startNextMatch(chatId: number) {
 
     await bot.sendMessage(chatId, matchText, {
         parse_mode: 'Markdown',
-        reply_markup: keyboard
+        reply_markup: keyboard,
+        message_thread_id: tournament.messageThreadId
     });
 }
 
@@ -644,7 +667,10 @@ async function handleDiceThrow(chatId: number, userId: number, userName: string)
         }
         
         // Roll dice for single player
-        const diceMessage = await bot.sendDice(chatId, { emoji: '🎲' });
+        const diceMessage = await bot.sendDice(chatId, { 
+            emoji: '🎲',
+            message_thread_id: tournament.messageThreadId
+        });
         
         // Wait for dice animation to complete and get the result
         setTimeout(async () => {
@@ -654,7 +680,9 @@ async function handleDiceThrow(chatId: number, userId: number, userName: string)
                 currentMatch.winner = currentMatch.player1;
                 currentMatch.completed = true;
                 
-                await bot.sendMessage(chatId, `🎲 ${userName} бросил: ${roll}\n\n🏆 ТУРНИР ЗАВЕРШЕН!\n\n🥇 Победитель: ${currentMatch.player1.name}`);
+                await bot.sendMessage(chatId, `🎲 ${userName} бросил: ${roll}\n\n🏆 ТУРНИР ЗАВЕРШЕН!\n\n🥇 Победитель: ${currentMatch.player1.name}`, {
+                    message_thread_id: tournament.messageThreadId
+                });
                 
                 // Clean up tournament
                 activeTournaments.delete(chatId);
@@ -677,8 +705,13 @@ async function handleDiceThrow(chatId: number, userId: number, userName: string)
     }
 
     // Roll dice with player name
-    await bot.sendMessage(chatId, `🎲 ${userName} кидает кубик...`);
-    const diceMessage = await bot.sendDice(chatId, { emoji: '🎲' });
+    await bot.sendMessage(chatId, `🎲 ${userName} кидает кубик...`, {
+        message_thread_id: tournament.messageThreadId
+    });
+    const diceMessage = await bot.sendDice(chatId, { 
+        emoji: '🎲',
+        message_thread_id: tournament.messageThreadId
+    });
     
     // Wait for dice animation to complete and get the result
     setTimeout(async () => {
@@ -735,7 +768,9 @@ async function resolveMatch(chatId: number) {
         winner = currentMatch.player2!;
     } else {
         // Tie - restart the round with both players
-        await bot.sendMessage(chatId, `🤝 НИЧЬЯ! (${roll1} - ${roll2})\n\n🔄 Начинаем раунд заново!`);
+        await bot.sendMessage(chatId, `🤝 НИЧЬЯ! (${roll1} - ${roll2})\n\n🔄 Начинаем раунд заново!`, {
+            message_thread_id: tournament.messageThreadId
+        });
         
         // Reset both players' rolls
         currentMatch.player1.roll = undefined;
@@ -751,7 +786,9 @@ async function resolveMatch(chatId: number) {
     currentMatch.winner = winner;
     currentMatch.completed = true;
 
-    await bot.sendMessage(chatId, `🏆 ПОБЕДИТЕЛЬ МАТЧА: ${winner.name}!\n\n${currentMatch.player1.name}: ${roll1}\n${currentMatch.player2!.name}: ${roll2}`);
+    await bot.sendMessage(chatId, `🏆 ПОБЕДИТЕЛЬ МАТЧА: ${winner.name}!\n\n${currentMatch.player1.name}: ${roll1}\n${currentMatch.player2!.name}: ${roll2}`, {
+        message_thread_id: tournament.messageThreadId
+    });
 
     // Move to next match
     setTimeout(() => startNextMatch(chatId), 2000);
@@ -792,9 +829,13 @@ async function advanceWinnersToNextRound(chatId: number) {
         }
     }
 
-    await bot.sendMessage(chatId, `🔄 ПЕРЕХОД К РАУНДУ ${tournament.currentRound! + 1}`);
+    await bot.sendMessage(chatId, `🔄 ПЕРЕХОД К РАУНДУ ${tournament.currentRound! + 1}`, {
+        message_thread_id: tournament.messageThreadId
+    });
     if (shouldByePlayerJoin) {
-        await bot.sendMessage(chatId, `🎯 ${tournament.bracket.byePlayer!.name} присоединяется к турниру!`);
+        await bot.sendMessage(chatId, `🎯 ${tournament.bracket.byePlayer!.name} присоединяется к турниру!`, {
+            message_thread_id: tournament.messageThreadId
+        });
     }
     
     // Send updated bracket for new round
@@ -855,7 +896,9 @@ async function finishTournament(chatId: number) {
         
         resultsMessage += `🎊 Поздравляем с победой! 🎊`;
         
-        await bot.sendMessage(chatId, resultsMessage);
+        await bot.sendMessage(chatId, resultsMessage, {
+            message_thread_id: tournament.messageThreadId
+        });
     }
 
     // Clean up tournament after a delay to allow message update
