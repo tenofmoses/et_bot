@@ -58,60 +58,9 @@ bot.on('message', (msg) => {
 
     console.log(`Received message from ${msg.from?.username || msg.from?.first_name}: ${messageText}`);
 
-    // Handle /start command
-    if (messageText === '/start') {
-        const welcomeText = msg.chat.type === 'private' 
-            ? '🎲 Привет! Я бот для игры в кубики и турниров!\n\nИспользуй команды:\n/dice - бросить кубик\n/help - показать помощь\n\nДобавь меня в группу и напиши "турнир" чтобы начать турнир!'
-            : '🎲 Привет! Я готов к турнирам!\n\nНапишите "турнир" чтобы начать турнир с участниками группы!';
-        
-        bot.sendMessage(chatId, welcomeText, {
-            message_thread_id: msg.message_thread_id
-        });
-        return;
-    }
-
-    // Handle /help command
-    if (messageText === '/help') {
-        const helpText = msg.chat.type === 'private'
-            ? '🎲 Доступные команды:\n\n/dice - бросить кубик (1-6)\n/start - начать работу с ботом\n/help - показать эту справку\n\nВ группах:\n"турнир" - начать турнир'
-            : '🎲 Доступные команды в группе:\n\n/dice - бросить кубик\n"турнир" - начать турнир\n/help - показать эту справку';
-        
-        bot.sendMessage(chatId, helpText, {
-            message_thread_id: msg.message_thread_id
-        });
-        return;
-    }
-
     // Handle tournament trigger - only exact word "турнир" with no other words
     if (messageText?.toLowerCase().trim() === 'турнир') {
         startTournament(chatId, msg.from, undefined, msg.message_thread_id);
-        return;
-    }
-
-    // Handle /dice command
-    if (messageText === '/dice') {
-        // Send dice emoji using Telegram's built-in dice feature
-        bot.sendDice(chatId, { 
-            emoji: '🎲',
-            message_thread_id: msg.message_thread_id
-        })
-            .then(() => {
-                console.log(`Sent dice to chat ${chatId}`);
-            })
-            .catch((error) => {
-                console.error('Error sending dice:', error);
-                bot.sendMessage(chatId, '❌ Произошла ошибка при броске кубика', {
-                    message_thread_id: msg.message_thread_id
-                });
-            });
-        return;
-    }
-
-    // Handle unknown commands
-    if (messageText?.startsWith('/')) {
-        bot.sendMessage(chatId, ' Неизвестная команда. Используй /help для списка доступных команд.', {
-            message_thread_id: msg.message_thread_id
-        });
         return;
     }
 });
