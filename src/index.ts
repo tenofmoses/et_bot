@@ -464,76 +464,61 @@ function createTournamentBracket(participants: Map<number, string>): TournamentB
         };
     }
     
-    // For even number of players, no bye needed
-    if (playerList.length % 2 === 0) {
-        const totalRounds = Math.ceil(Math.log2(playerList.length));
-        const rounds: Round[] = [];
-        
-        // Create first round matches
-        const firstRoundMatches: Match[] = [];
-        for (let i = 0; i < playerList.length; i += 2) {
-            firstRoundMatches.push({
-                player1: { id: playerList[i].id, name: playerList[i].name },
-                player2: { id: playerList[i + 1].id, name: playerList[i + 1].name },
-                completed: false
-            });
-        }
-        rounds.push({ matches: firstRoundMatches });
-        
-        // Create subsequent rounds
-        let currentMatches = firstRoundMatches.length;
-        for (let round = 1; round < totalRounds; round++) {
-            currentMatches = Math.ceil(currentMatches / 2);
-            const matches: Match[] = [];
-            
-            for (let i = 0; i < currentMatches; i++) {
-                matches.push({
-                    player1: { id: -1, name: 'TBD' },
-                    player2: { id: -1, name: 'TBD' },
-                    completed: false
-                });
-            }
-            rounds.push({ matches });
-        }
-        
-        return { rounds, totalRounds, byePlayer: undefined, byeRound: -1 };
-    }
-    
-    // For odd number of players, calculate bye logic
-    // The bye player should join when there's an odd number of winners that need to be paired
+    // Universal bracket logic that handles both even and odd scenarios
     const totalRounds = Math.ceil(Math.log2(playerList.length));
     const rounds: Round[] = [];
-    const byePlayer = playerList[playerList.length - 1];
     
-    // Create first round with even number of players (exclude bye player)
-    const firstRoundMatches: Match[] = [];
-    const playersInFirstRound = playerList.length - 1; // Exclude bye player
+    // Determine if we need a bye player
+    let needsByePlayer = false;
+    let byePlayer: { id: number; name: string } | undefined = undefined;
+    let currentPlayerCount = playerList.length;
     
-    for (let i = 0; i < playersInFirstRound; i += 2) {
-        firstRoundMatches.push({
+    // Check if any round will have odd number of winners
+    let tempWinners = Math.floor(playerList.length / 2);
+    while (tempWinners > 1) {
+        if (tempWinners % 2 === 1) {
+            needsByePlayer = true;
+            break;
+        }
+        tempWinners = Math.floor(tempWinners / 2);
+    }
+    
+    // If odd number of players OR even players that create odd winners, use bye
+    if (playerList.length % 2 === 1 || needsByePlayer) {
+        byePlayer = playerList[playerList.length - 1];
+        currentPlayerCount = playerList.length - 1;
+        console.log(`[DEBUG] Using bye player: ${byePlayer.name}`);
+    }
+    
+    // Create first round with even number of players
+    const firstRoundMatchesArray: Match[] = [];
+    for (let i = 0; i < currentPlayerCount; i += 2) {
+        firstRoundMatchesArray.push({
             player1: { id: playerList[i].id, name: playerList[i].name },
             player2: { id: playerList[i + 1].id, name: playerList[i + 1].name },
             completed: false
         });
     }
-    rounds.push({ matches: firstRoundMatches });
+    rounds.push({ matches: firstRoundMatchesArray });
     
-    // Calculate when bye player should join
-    let winnersCount = firstRoundMatches.length; // Winners from first round
+    // Calculate when bye player should join (if needed)
     let byeRound = -1;
-    
-    // Find the round where adding the bye player creates an even number for pairing
-    for (let round = 1; round < totalRounds; round++) {
-        if ((winnersCount + 1) % 2 === 0) {
-            // Adding bye player makes even number - this is the round
-            byeRound = round;
-            break;
+    if (byePlayer) {
+        let winnersCount = firstRoundMatchesArray.length; // Winners from first round
+        
+        // Find the round where adding the bye player creates an even number for pairing
+        for (let round = 1; round < totalRounds; round++) {
+            if ((winnersCount + 1) % 2 === 0) {
+                // Adding bye player makes even number - this is the round
+                byeRound = round;
+                break;
+            }
+            winnersCount = Math.ceil(winnersCount / 2);
         }
-        winnersCount = Math.ceil(winnersCount / 2);
     }
     
     // Create subsequent rounds
-    let currentWinners = firstRoundMatches.length;
+    let currentWinners = firstRoundMatchesArray.length;
     for (let round = 1; round < totalRounds; round++) {
         // Add bye player if this is their round
         if (round === byeRound) {
