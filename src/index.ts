@@ -530,6 +530,7 @@ async function startNextMatch(chatId: number) {
     const currentMatch = currentRound.matches[tournament.currentMatch!];
     
     console.log(`[DEBUG] Current match exists: ${!!currentMatch}, completed: ${currentMatch?.completed}`);
+    console.log(`[DEBUG] Round has ${currentRound.matches.length} matches total`);
 
     if (!currentMatch || currentMatch.completed) {
         // Move to next match or round
@@ -701,10 +702,10 @@ async function handleDiceThrow(chatId: number, userId: number, userName: string)
                 }
             } else if (currentMatch.player1.roll !== undefined && currentMatch.player2!.roll !== undefined) {
                 await resolveMatch(chatId);
+            } else {
+                // Update tournament message to reflect current state
+                await updateTournamentMessage(chatId);
             }
-            
-            // Update tournament message to reflect current state
-            await updateTournamentMessage(chatId);
         } catch (error) {
             console.error('Error processing dice result:', error);
         }
@@ -767,6 +768,10 @@ async function resolveMatch(chatId: number) {
 
     // Move to next match
     console.log(`[DEBUG] Match completed. Moving to next match. Current round: ${tournament.currentRound}, current match: ${tournament.currentMatch}`);
+    console.log(`[DEBUG] Match winner: ${winner.name}, match marked as completed: ${currentMatch.completed}`);
+    
+    // Don't call updateTournamentMessage here since resolveMatch is called from within handleDiceThrow
+    // which already calls updateTournamentMessage
     setTimeout(() => startNextMatch(chatId), 2000);
 }
 
