@@ -281,8 +281,12 @@ bot.on('callback_query', async (callbackQuery) => {
             
             console.log(`${userName} joined tournament in chat ${chatId}`);
         } else if (data === 'throw_dice') {
-            await handleDiceThrow(chatId, userId, userName);
-            await bot.answerCallbackQuery(callbackQuery.id, { text: 'Кубик брошен!' });
+            const canThrow = await handleDiceThrow(chatId, userId, userName);
+            if (canThrow) {
+                await bot.answerCallbackQuery(callbackQuery.id, { text: 'Кубик брошен!' });
+            } else {
+                await bot.answerCallbackQuery(callbackQuery.id, { text: 'Вы уже бросили кубик!' });
+            }
         } else if (data === 'leave_tournament') {
             const tournament = activeTournaments.get(chatId);
             if (!tournament || !tournament.participants.has(userId)) {
@@ -606,9 +610,9 @@ async function startNextMatch(chatId: number) {
 }
 
 // Function to handle dice throw
-async function handleDiceThrow(chatId: number, userId: number, userName: string) {
+async function handleDiceThrow(chatId: number, userId: number, userName: string): Promise<boolean> {
     const tournament = activeTournaments.get(chatId);
-    if (!tournament || !tournament.bracket) return;
+    if (!tournament || !tournament.bracket) return false;
 
     const currentRound = tournament.bracket.rounds[tournament.currentRound!];
     const currentMatch = currentRound.matches[tournament.currentMatch!];
@@ -616,11 +620,11 @@ async function handleDiceThrow(chatId: number, userId: number, userName: string)
     // Handle single player match
     if (!currentMatch.player2) {
         if (currentMatch.player1.id !== userId) {
-            return; // Not this player's turn
+            return false; // Not this player's turn
         }
         
         if (currentMatch.player1.roll !== undefined) {
-            return; // Already rolled
+            return false; // Already rolled
         }
         
         // Roll dice for single player
@@ -647,18 +651,18 @@ async function handleDiceThrow(chatId: number, userId: number, userName: string)
                 console.error('Error processing single player dice result:', error);
             }
         }, 4000); // Wait 4 seconds for dice animation
-        return;
+        return true;
     }
 
     // Check if user is in current match
     if (currentMatch.player1.id !== userId && currentMatch.player2!.id !== userId) {
-        return; // Not this player's turn
+        return false; // Not this player's turn
     }
 
     // Check if player already rolled
     if ((currentMatch.player1.id === userId && currentMatch.player1.roll !== undefined) ||
         (currentMatch.player2!.id === userId && currentMatch.player2!.roll !== undefined)) {
-        return; // Already rolled
+        return false; // Already rolled
     }
 
     // Roll dice with player name
@@ -705,6 +709,8 @@ async function handleDiceThrow(chatId: number, userId: number, userName: string)
             console.error('Error processing dice result:', error);
         }
     }, 4000); // Wait 4 seconds for dice animation
+    
+    return true;
 }
 
 // Function to resolve match
