@@ -302,6 +302,10 @@ bot.on('callback_query', async (callbackQuery) => {
                 await bot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир не найден!' });
                 return;
             }
+            if (tournament.organizerId !== userId) {
+                await bot.answerCallbackQuery(callbackQuery.id, { text: 'Только организатор может отменить турнир!' });
+                return;
+            }
             await handleCancelTournament(chatId, userId);
             await bot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир отменен!' });
         } else if (data === 'start_game') {
