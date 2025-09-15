@@ -573,8 +573,12 @@ async function startNextMatch(chatId: number) {
     const tournament = activeTournaments.get(chatId);
     if (!tournament || !tournament.bracket) return;
 
+    console.log(`[DEBUG] startNextMatch called. Current round: ${tournament.currentRound}, current match: ${tournament.currentMatch}`);
+    
     const currentRound = tournament.bracket.rounds[tournament.currentRound!];
     const currentMatch = currentRound.matches[tournament.currentMatch!];
+    
+    console.log(`[DEBUG] Current match exists: ${!!currentMatch}, completed: ${currentMatch?.completed}`);
 
     if (!currentMatch || currentMatch.completed) {
         // Move to next match or round
@@ -582,10 +586,15 @@ async function startNextMatch(chatId: number) {
         if (tournament.currentMatch! >= currentRound.matches.length) {
             // Check if all matches in current round are completed
             const allMatchesCompleted = currentRound.matches.every(match => match.completed);
+            console.log(`[DEBUG] All matches completed in round: ${allMatchesCompleted}`);
             if (!allMatchesCompleted) {
-                // Still have matches to complete in this round
-                tournament.currentMatch = 0;
-                await startNextMatch(chatId);
+                // Find next incomplete match
+                const nextIncompleteMatchIndex = currentRound.matches.findIndex(match => !match.completed);
+                console.log(`[DEBUG] Next incomplete match index: ${nextIncompleteMatchIndex}`);
+                if (nextIncompleteMatchIndex !== -1) {
+                    tournament.currentMatch = nextIncompleteMatchIndex;
+                    await startNextMatch(chatId);
+                }
                 return;
             }
             
@@ -601,9 +610,10 @@ async function startNextMatch(chatId: number) {
             
             // Advance winners to next round
             await advanceWinnersToNextRound(chatId);
+            return;
         }
         
-        // Start next match
+        // Start next match in current round
         await startNextMatch(chatId);
         return;
     }
@@ -776,9 +786,21 @@ async function resolveMatch(chatId: number) {
         currentMatch.player1.roll = undefined;
         currentMatch.player2!.roll = undefined;
         
-        // Restart the match after a delay
+        // Restart the match after a delay - send new match message instead of recursion
         setTimeout(async () => {
-            await startNextMatch(chatId);
+            const matchText = `🎯 МАТЧ ${tournament.currentMatch! + 1} (Раунд ${tournament.currentRound! + 1})\n\n${currentMatch.player1.name} vs ${currentMatch.player2!.name}\n\nВы должны бросить кубик!`;
+            
+            const keyboard = {
+                inline_keyboard: [[
+                    { text: '🎲 Кинуть кубик', callback_data: 'throw_dice' }
+                ]]
+            };
+
+            await bot.sendMessage(chatId, matchText, {
+                parse_mode: 'Markdown',
+                reply_markup: keyboard,
+                message_thread_id: tournament.messageThreadId
+            });
         }, 2000);
         return;
     }
@@ -791,6 +813,7 @@ async function resolveMatch(chatId: number) {
     });
 
     // Move to next match
+    console.log(`[DEBUG] Match completed. Moving to next match. Current round: ${tournament.currentRound}, current match: ${tournament.currentMatch}`);
     setTimeout(() => startNextMatch(chatId), 2000);
 }
 
