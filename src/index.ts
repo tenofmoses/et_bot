@@ -488,9 +488,16 @@ function createTournamentBracket(participants: Map<number, string>): TournamentB
         byePlayer = playerList[playerList.length - 1];
         currentPlayerCount = playerList.length - 1;
         console.log(`[DEBUG] Using bye player: ${byePlayer.name}`);
+        
+        // Ensure even number of players for first round
+        if (currentPlayerCount % 2 === 1) {
+            // If we still have odd number after removing bye player, remove one more
+            currentPlayerCount = currentPlayerCount - 1;
+            console.log(`[DEBUG] Adjusted to ${currentPlayerCount} players for even first round`);
+        }
     }
     
-    // Create first round with even number of players
+    // Create first round with guaranteed even number of players
     const firstRoundMatchesArray: Match[] = [];
     for (let i = 0; i < currentPlayerCount; i += 2) {
         firstRoundMatchesArray.push({
