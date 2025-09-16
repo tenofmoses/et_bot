@@ -2,10 +2,10 @@ import TelegramBot from 'node-telegram-bot-api';
 import {
   createTournamentBracket,
   collectWinnersOfRound,
-  pickByeIfNeeded,
   addByeIfJoiningThisRound,
   applyPlayersToRound,
   isRoundCompleted,
+  pickByeConsideringEntrants,
 } from './bracket';
 
 import {
@@ -304,7 +304,7 @@ export class TournamentService {
 
   /**
    * Принимает клик «Кинуть кубик».
-   * Делает клик идемпотентным для той же участницы: флаг ставится до await.
+   * Делает клик идемпотентным для того же участника: флаг ставится до await.
    * Отправляет анимацию кубика, записывает значение и либо ждёт второго броска, либо завершает матч.
    */
   private async handleDiceThrow(chatId: number, telegramUserId: number, displayUserName: string): Promise<boolean> {
@@ -436,44 +436,43 @@ export class TournamentService {
       return this.finishTournament(chatId);
     }
 
-    const bracket = tournament.bracket;
-    const prevRoundIndex = tournament.currentRound! - 1;          // индекс раунда, из которого берём победителей
-    const currRoundIndex = tournament.currentRound!;               // индекс раунда, в который раскладываем игроков
+    const previousRound = tournament.bracket.rounds[tournament.currentRound! - 1];
+    const currentRound = tournament.bracket.rounds[tournament.currentRound!];
+    const currentRoundIndex = tournament.currentRound!;
 
-    const previousRound = bracket.rounds[prevRoundIndex];
-    const currentRound = bracket.rounds[currRoundIndex];
+    // 1) Победитель прошедшего раунда
+    const winners = collectWinnersOfRound(previousRound);
 
-    // Победители предыдущего раунда
-    const roundWinners = collectWinnersOfRound(previousRound);
-
-    // Если число победителей нечётное и для СЛЕДУЮЩЕГО (currRoundIndex) раунда
-    // запланирована «вклейка», выбираем конкретного bye-игрока
-    const byeSelection = pickByeIfNeeded(roundWinners, bracket, prevRoundIndex);
-    if (byeSelection.byePicked && byeSelection.joinRoundIndex !== undefined) {
-      bracket.byePlayersByJoinRound.set(byeSelection.joinRoundIndex, byeSelection.byePicked);
-    }
-
-    // Если в ЭТОТ (currRoundIndex) раунд кто-то должен «вклеиться», добавим его
-    const playersToPlaceThisRound = addByeIfJoiningThisRound(
-      byeSelection.playersToPlace,
-      bracket,
-      currRoundIndex
+    // 2) Сначала присоединяем тех, кому «вклейка» запланирована именно в ЭТОТ раунд
+    const entrantsAfterJoin = addByeIfJoiningThisRound(
+      winners,
+      tournament.bracket,
+      currentRoundIndex
     );
 
-    // Сообщения
+    // 3) Если входящих нечётно и на следующий раунд запланирована «вклейка» —
+    // снимаем одного участника в bye на следующий раунд
+    const { playersToPlace, byePicked, joinRoundIndex } = pickByeConsideringEntrants(
+      entrantsAfterJoin,
+      tournament.bracket,
+      currentRoundIndex
+    );
+    if (byePicked !== undefined && joinRoundIndex !== undefined) {
+      tournament.bracket.byePlayersByJoinRound.set(joinRoundIndex, byePicked);
+    }
+
     await announceRoundTransition(this.telegramBot, chatId, tournament);
-    if (bracket.byePlayersByJoinRound.has(currRoundIndex)) {
+
+    // Сообщаем о «вклейке», если в этот раунд действительно кто-то присоединился
+    if (tournament.bracket.byePlayersByJoinRound.has(currentRoundIndex)) {
       await announceByeJoins(this.telegramBot, chatId, tournament);
     }
 
-    // Разложить игроков по матчам текущего раунда
-    applyPlayersToRound(currentRound, playersToPlaceThisRound);
+    // 4) Раскладываем игроков по матчам текущего раунда
+    applyPlayersToRound(currentRound, playersToPlace);
 
-    // Показать сетку и обновить «шапку»
     await sendTournamentBracket(this.telegramBot, chatId, tournament);
     await this.updateTournamentMessage(chatId);
-
-    // Старт следующего матча с небольшой паузой
     setTimeout(() => this.startNextMatch(chatId), 600);
   }
 

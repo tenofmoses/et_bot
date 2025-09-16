@@ -132,42 +132,6 @@ export function collectWinnersOfRound(round: Round): Player[] {
 }
 
 /**
- * pickByeIfNeeded
- * На переходе из currentRoundIndex в currentRoundIndex+1, если число победительниц нечётно
- * и следующий раунд помечен как раунд «вклейки», выбирает конкретную bye-участника
- * (по умолчанию последнего) и исключает его из текущей раскладки.
- *
- * Возвращает список для раскладки и, при наличии, саму bye-участника с индексом раунда, куда он «вклеится».
- */
-export function pickByeIfNeeded(
-  winners: Player[],
-  bracket: TournamentBracket,
-  currentRoundIndex: number
-): { playersToPlace: Player[]; byePicked?: Player; joinRoundIndex?: number } {
-  const nextRoundIndex = currentRoundIndex + 1;
-  const isOdd = winners.length % 2 === 1;
-  const joinPlanned = bracket.byeJoinRounds.includes(nextRoundIndex);
-
-  log(
-    `pickByeIfNeeded: winners=${winners.map(w => w.name).join(", ")}, currentRound=${currentRoundIndex}, nextRound=${nextRoundIndex}, joinPlanned=${joinPlanned}`
-  );
-
-  if (isOdd && joinPlanned) {
-    const byePicked = winners[winners.length - 1];
-    const playersToPlace = winners.slice(0, winners.length - 1);
-    log(
-      `pickByeIfNeeded: picked bye = ${byePicked.name}, playersToPlace = ${playersToPlace
-        .map(p => p.name)
-        .join(", ")}; joinRoundIndex=${nextRoundIndex}`
-    );
-    return { playersToPlace, byePicked, joinRoundIndex: nextRoundIndex };
-  }
-
-  log("pickByeIfNeeded: no bye picked");
-  return { playersToPlace: winners };
-}
-
-/**
  * addByeIfJoiningThisRound
  * Если для currentRoundIndex заранее выбран bye-игрок, добавляет её к списку раскладки.
  * Удаление записи из карты можно делать снаружи после вызова, когда это удобно.
@@ -195,6 +159,39 @@ export function addByeIfJoiningThisRound(
   }
 
   return playersToPlace;
+}
+
+/**
+ * pickByeConsideringEntrants
+ * Берёт уже сформированный список входящих в ТЕКУЩИЙ раунд (winners + все вклейки этого раунда).
+ * Если их число нечётно и на следующий раунд запланирована «вклейка» —
+ * вынимает одного участника в bye для следующего раунда.
+ */
+export function pickByeConsideringEntrants(
+  entrants: Player[],
+  bracket: TournamentBracket,
+  currentRoundIndex: number
+): { playersToPlace: Player[]; byePicked?: Player; joinRoundIndex?: number } {
+  const nextRoundIndex = currentRoundIndex + 1;
+  const joinPlannedNext = bracket.byeJoinRounds.includes(nextRoundIndex);
+
+  log(
+    `pickByeConsideringEntrants: entrants=${entrants.map(e => e.name).join(", ")}, currentRound=${currentRoundIndex}, nextRound=${nextRoundIndex}, nextHasJoin=${joinPlannedNext}`
+  );
+
+  if (entrants.length % 2 === 1 && joinPlannedNext) {
+    const byePicked = entrants[entrants.length - 1]; // стратегия выбора — последняя
+    const playersToPlace = entrants.slice(0, -1);
+    log(
+      `pickByeConsideringEntrants: picked bye = ${byePicked.name}, playersToPlace = ${playersToPlace
+        .map(p => p.name)
+        .join(", ")}, joinRoundIndex=${nextRoundIndex}`
+    );
+    return { playersToPlace, byePicked, joinRoundIndex: nextRoundIndex };
+  }
+
+  log("pickByeConsideringEntrants: no bye picked");
+  return { playersToPlace: entrants };
 }
 
 /**
