@@ -22,184 +22,217 @@ import {
 import { Tournament } from './types';
 
 export class TournamentService {
-  private bot: TelegramBot;
-  private activeTournaments = new Map<number, Tournament>();
+  private telegramBot: TelegramBot;
+  private activeTournamentsByChatId = new Map<number, Tournament>();
+
+  // Отслеживание, бросали ли уже кубик в текущем матче (по чату)
+  private hasPlayerOneThrownByChatId = new Map<number, boolean>();
+  private hasPlayerTwoThrownByChatId = new Map<number, boolean>();
 
   constructor(bot: TelegramBot) {
-    this.bot = bot;
+    this.telegramBot = bot;
   }
 
-  onMessage = (msg: TelegramBot.Message) => {
-    const chatId = msg.chat.id;
-    const text = msg.text?.toLowerCase().trim();
-    if (text === 'турнир') {
-      this.startTournament(chatId, msg.from, undefined, msg.message_thread_id);
+  onMessage = (message: TelegramBot.Message) => {
+    const chatId = message.chat.id;
+    const messageText = message.text?.toLowerCase().trim();
+    if (messageText === 'турнир') {
+      this.startTournament(chatId, message.from, undefined, message.message_thread_id);
     }
   };
 
-  onCallback = async (cb: TelegramBot.CallbackQuery) => {
-    const chatId = cb.message?.chat.id;
+  onCallback = async (callbackQuery: TelegramBot.CallbackQuery) => {
+    const chatId = callbackQuery.message?.chat.id;
     if (!chatId) return;
 
-    const userId = cb.from.id;
-    const data = cb.data;
-    const userName = cb.from.username ? `@${cb.from.username}` : cb.from.first_name || 'Неизвестный';
+    const telegramUserId = callbackQuery.from.id;
+    const callbackData = callbackQuery.data;
+    const displayUserName = callbackQuery.from.username
+      ? `@${callbackQuery.from.username}`
+      : callbackQuery.from.first_name || 'Неизвестный';
 
     try {
-      if (data === 'join_tournament') {
-        const t = this.activeTournaments.get(chatId);
-        if (!t) return await this.bot.answerCallbackQuery(cb.id, { text: 'Турнир не найден!' });
-        if (t.participants.has(userId)) return await this.bot.answerCallbackQuery(cb.id, { text: 'Вы уже участвуете в турнире!' });
+      if (callbackData === 'join_tournament') {
+        const tournament = this.activeTournamentsByChatId.get(chatId);
+        if (!tournament) return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир не найден!' });
+        if (tournament.participants.has(telegramUserId)) {
+          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Вы уже участвуете в турнире!' });
+        }
 
-        t.participants.add(userId);
-        t.participantNames.set(userId, userName);
+        tournament.participants.add(telegramUserId);
+        tournament.participantNames.set(telegramUserId, displayUserName);
         await this.updateTournamentMessage(chatId);
-        await this.bot.answerCallbackQuery(cb.id, { text: 'Вы присоединились к турниру!' });
+        await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Вы присоединились к турниру!' });
 
-      } else if (data === 'leave_tournament') {
-        const t = this.activeTournaments.get(chatId);
-        if (!t || !t.participants.has(userId)) return await this.bot.answerCallbackQuery(cb.id, { text: 'Вы не участвуете в турнире!' });
-        if (t.gameState === 'playing') return await this.bot.answerCallbackQuery(cb.id, { text: 'Нельзя выйти после старта!' });
+      } else if (callbackData === 'leave_tournament') {
+        const tournament = this.activeTournamentsByChatId.get(chatId);
+        if (!tournament || !tournament.participants.has(telegramUserId)) {
+          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Вы не участвуете в турнире!' });
+        }
+        if (tournament.gameState === 'playing') {
+          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Нельзя выйти после старта!' });
+        }
 
-        t.participants.delete(userId);
-        t.participantNames.delete(userId);
+        tournament.participants.delete(telegramUserId);
+        tournament.participantNames.delete(telegramUserId);
         await this.updateTournamentMessage(chatId);
-        await this.bot.answerCallbackQuery(cb.id, { text: 'Вы вышли из турнира!' });
+        await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Вы вышли из турнира!' });
 
-      } else if (data === 'cancel_tournament') {
-        const t = this.activeTournaments.get(chatId);
-        if (!t) return await this.bot.answerCallbackQuery(cb.id, { text: 'Турнир не найден!' });
-        if (t.organizerId !== userId) return await this.bot.answerCallbackQuery(cb.id, { text: 'Только организатор может отменить турнир!' });
+      } else if (callbackData === 'cancel_tournament') {
+        const tournament = this.activeTournamentsByChatId.get(chatId);
+        if (!tournament) return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир не найден!' });
+        if (tournament.organizerId !== telegramUserId) {
+          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Только организатор может отменить турнир!' });
+        }
 
-        t.gameState = 'cancelled';
-        await editMessageWithRetry(this.bot, chatId, t.messageId, '🚫 ТУРНИР ОТМЕНЕН\n\nТурнир был отменен.');
-        this.activeTournaments.delete(chatId);
-        await this.bot.answerCallbackQuery(cb.id, { text: 'Турнир отменен!' });
+        tournament.gameState = 'cancelled';
+        await editMessageWithRetry(this.telegramBot, chatId, tournament.messageId, '🚫 ТУРНИР ОТМЕНЕН\n\nТурнир был отменен.');
+        this.activeTournamentsByChatId.delete(chatId);
+        await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир отменен!' });
 
-      } else if (data === 'start_game') {
-        const t = this.activeTournaments.get(chatId);
-        if (!t || t.organizerId !== userId) return await this.bot.answerCallbackQuery(cb.id, { text: 'Только организатор может начать турнир!' });
-        if (t.participants.size < 1) return await this.bot.answerCallbackQuery(cb.id, { text: 'Нужно минимум 1 участник для начала игры!' });
+      } else if (callbackData === 'start_game') {
+        const tournament = this.activeTournamentsByChatId.get(chatId);
+        if (!tournament || tournament.organizerId !== telegramUserId) {
+          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Только организатор может начать турнир!' });
+        }
+        if (tournament.participants.size < 1) {
+          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Нужно минимум 1 участник для начала игры!' });
+        }
 
         await this.startTournamentBracket(chatId);
-        await this.bot.answerCallbackQuery(cb.id, { text: 'Турнир начался!' });
+        await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир начался!' });
 
-      } else if (data === 'throw_dice') {
-        const ok = await this.handleDiceThrow(chatId, userId, userName);
-        await this.bot.answerCallbackQuery(cb.id, { text: ok ? 'Кубик брошен!' : 'Вы не можете бросить кубик сейчас!' });
+      } else if (callbackData === 'throw_dice') {
+        const wasAccepted = await this.handleDiceThrow(chatId, telegramUserId, displayUserName);
+        await this.telegramBot.answerCallbackQuery(callbackQuery.id, {
+          text: wasAccepted ? 'Кубик брошен!' : 'Вы не можете бросить кубик сейчас!',
+        });
       }
     } catch {
-      await this.bot.answerCallbackQuery(cb.id, { text: 'Произошла ошибка!' });
+      await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Произошла ошибка!' });
     }
   };
 
   private async startTournament(
     chatId: number,
-    initiator: TelegramBot.User | undefined,
+    telegramUser: TelegramBot.User | undefined,
     startTime?: string,
     messageThreadId?: number
   ) {
-    if (!initiator) return;
-    if (this.activeTournaments.has(chatId)) {
-      await this.bot.sendMessage(chatId, ' В этом чате уже идет турнир! Дождитесь его завершения.', { message_thread_id: messageThreadId });
+    if (!telegramUser) return;
+    if (this.activeTournamentsByChatId.has(chatId)) {
+      await this.telegramBot.sendMessage(
+        chatId,
+        ' В этом чате уже идет турнир! Дождитесь его завершения.',
+        { message_thread_id: messageThreadId }
+      );
       return;
     }
 
-    const initiatorName = initiator.username ? `@${initiator.username}` : initiator.first_name || 'Неизвестный';
-    let tournamentMessage = ` ТУРНИР НАЧАЛСЯ! \n\nИнициатор: ${initiatorName}`;
-    if (startTime) tournamentMessage += `\n Время начала: ${startTime}`;
-    tournamentMessage += `\n\n Участники:\n_Пока никого нет_\n\n Нажмите кнопку ниже, чтобы присоединиться!`;
+    const initiatorDisplayName = telegramUser.username ? `@${telegramUser.username}` : telegramUser.first_name || 'Неизвестный';
+    let tournamentHeaderText = ` ТУРНИР НАЧАЛСЯ! \n\nИнициатор: ${initiatorDisplayName}`;
+    if (startTime) tournamentHeaderText += `\n Время начала: ${startTime}`;
+    tournamentHeaderText += `\n\n Участники:\n_Пока никого нет_\n\n Нажмите кнопку ниже, чтобы присоединиться!`;
 
-    const keyboard = {
+    const inlineKeyboard: TelegramBot.InlineKeyboardMarkup = {
       inline_keyboard: [
-        [{ text: ' Участвую!', callback_data: 'join_tournament' }, { text: ' Выйти', callback_data: 'leave_tournament' }],
-        [{ text: ' Начать игру', callback_data: 'start_game' }, { text: ' Отменить турнир', callback_data: 'cancel_tournament' }],
+        [
+          { text: '🎮 Участвую!', callback_data: 'join_tournament' },
+          { text: '❌ Выйти', callback_data: 'leave_tournament' },
+        ],
+        [
+          { text: '🎲 Начать игру', callback_data: 'start_game' },
+          { text: '🚫 Отменить турнир', callback_data: 'cancel_tournament' },
+        ],
       ],
     };
 
-    const sentMessage = await sendMessageWithRetry(this.bot, chatId, tournamentMessage, {
-      reply_markup: keyboard,
+    const headerMessage = await sendMessageWithRetry(this.telegramBot, chatId, tournamentHeaderText, {
+      reply_markup: inlineKeyboard,
       message_thread_id: messageThreadId,
     });
 
-    this.activeTournaments.set(chatId, {
-      messageId: sentMessage.message_id,
+    this.activeTournamentsByChatId.set(chatId, {
+      messageId: headerMessage.message_id,
       messageThreadId,
       participants: new Set<number>(),
       participantNames: new Map<number, string>(),
-      organizerId: initiator.id,
-      organizerName: initiatorName,
+      organizerId: telegramUser.id,
+      organizerName: initiatorDisplayName,
       gameState: 'registration',
       startTime,
     });
   }
 
   private async updateTournamentMessage(chatId: number) {
-    const t = this.activeTournaments.get(chatId);
-    if (!t) return;
+    const tournament = this.activeTournamentsByChatId.get(chatId);
+    if (!tournament) return;
 
-    const buttons: any[] = [];
-    if (t.gameState === 'registration') {
-      buttons.push([
+    const inlineButtons: TelegramBot.InlineKeyboardButton[][] = [];
+    if (tournament.gameState === 'registration') {
+      inlineButtons.push([
         { text: '🎮 Участвую!', callback_data: 'join_tournament' },
         { text: '❌ Выйти', callback_data: 'leave_tournament' },
       ]);
-      buttons.push([
+      inlineButtons.push([
         { text: '🎲 Начать игру', callback_data: 'start_game' },
         { text: '🚫 Отменить турнир', callback_data: 'cancel_tournament' },
       ]);
-    } else if (t.gameState === 'playing' && t.bracket && t.currentRound !== undefined && t.currentMatch !== undefined) {
-      const currentMatch = t.bracket.rounds[t.currentRound].matches[t.currentMatch];
+    } else if (tournament.gameState === 'playing' && tournament.bracket && tournament.currentRound !== undefined && tournament.currentMatch !== undefined) {
+      const currentMatch = tournament.bracket.rounds[tournament.currentRound].matches[tournament.currentMatch];
       if (!currentMatch.completed && currentMatch.player2) {
-        const needP1 = currentMatch.player1.roll === undefined;
-        const needP2 = currentMatch.player2.roll === undefined;
-        if (needP1 || needP2) {
-          buttons.push([{ text: '🎲 Кинуть кубик', callback_data: 'throw_dice' }]);
+        const needPlayerOneRoll = currentMatch.player1.roll === undefined;
+        const needPlayerTwoRoll = currentMatch.player2.roll === undefined;
+        if (needPlayerOneRoll || needPlayerTwoRoll) {
+          inlineButtons.push([{ text: '🎲 Кинуть кубик', callback_data: 'throw_dice' }]);
         }
       }
     }
 
-    const keyboard = { inline_keyboard: buttons };
-    await editMessageWithRetry(this.bot, chatId, t.messageId, buildTournamentHeader(t), { reply_markup: keyboard });
+    const inlineKeyboard: TelegramBot.InlineKeyboardMarkup = { inline_keyboard: inlineButtons };
+    await editMessageWithRetry(this.telegramBot, chatId, tournament.messageId, buildTournamentHeader(tournament), { reply_markup: inlineKeyboard });
   }
 
   private async startTournamentBracket(chatId: number) {
-    const t = this.activeTournaments.get(chatId);
-    if (!t) return;
+    const tournament = this.activeTournamentsByChatId.get(chatId);
+    if (!tournament) return;
 
-    t.bracket = createTournamentBracket(t.participantNames);
-    t.currentRound = 0;
-    t.currentMatch = 0;
-    t.gameState = 'playing';
+    tournament.bracket = createTournamentBracket(tournament.participantNames);
+    tournament.currentRound = 0;
+    tournament.currentMatch = 0;
+    tournament.gameState = 'playing';
 
     await this.updateTournamentMessage(chatId);
     await this.startNextMatch(chatId);
   }
 
   private async startNextMatch(chatId: number): Promise<void> {
-    const t = this.activeTournaments.get(chatId);
-    if (!t || !t.bracket) return;
+    const tournament = this.activeTournamentsByChatId.get(chatId);
+    if (!tournament || !tournament.bracket) return;
 
-    const currentRound = t.bracket.rounds[t.currentRound!];
-    const currentMatch = currentRound.matches[t.currentMatch!];
+    // Очистим флаги для нового матча
+    this.clearCurrentMatchDiceFlags(chatId);
+
+    const currentRound = tournament.bracket.rounds[tournament.currentRound!];
+    const currentMatch = currentRound.matches[tournament.currentMatch!];
 
     if (!currentMatch || currentMatch.completed) {
-      t.currentMatch! += 1;
+      tournament.currentMatch! += 1;
 
-      if (t.currentMatch! >= currentRound.matches.length) {
+      if (tournament.currentMatch! >= currentRound.matches.length) {
         if (!isRoundCompleted(currentRound)) {
-          const idx = currentRound.matches.findIndex(m => !m.completed);
-          if (idx !== -1) {
-            t.currentMatch = idx;
+          const firstIncompleteIndex = currentRound.matches.findIndex(m => !m.completed);
+          if (firstIncompleteIndex !== -1) {
+            tournament.currentMatch = firstIncompleteIndex;
             return this.startNextMatch(chatId);
           }
           return;
         }
 
-        t.currentRound! += 1;
-        t.currentMatch = 0;
+        tournament.currentRound! += 1;
+        tournament.currentMatch = 0;
 
-        if (t.currentRound! >= t.bracket.totalRounds) {
+        if (tournament.currentRound! >= tournament.bracket.totalRounds) {
           return this.finishTournament(chatId);
         }
 
@@ -214,146 +247,182 @@ export class TournamentService {
       currentMatch.winner = currentMatch.player1;
       currentMatch.completed = true;
 
-      await announceAutoAdvance(this.bot, chatId, t, currentMatch.player1.name);
+      await announceAutoAdvance(this.telegramBot, chatId, tournament, currentMatch.player1.name);
       await this.updateTournamentMessage(chatId);
       setTimeout(() => this.startNextMatch(chatId), 600);
       return;
     }
 
-    await promptMatch(this.bot, chatId, t, t.currentMatch! + 1);
+    await promptMatch(this.telegramBot, chatId, tournament, tournament.currentMatch! + 1);
   }
 
-  private async handleDiceThrow(chatId: number, userId: number, userName: string): Promise<boolean> {
-    const t = this.activeTournaments.get(chatId);
-    if (!t || !t.bracket) return false;
+  private async handleDiceThrow(chatId: number, telegramUserId: number, displayUserName: string): Promise<boolean> {
+    const tournament = this.activeTournamentsByChatId.get(chatId);
+    if (!tournament || !tournament.bracket) return false;
 
-    const currentRound = t.bracket.rounds[t.currentRound!];
-    const currentMatch = currentRound.matches[t.currentMatch!];
+    const currentRound = tournament.bracket.rounds[tournament.currentRound!];
+    const currentMatch = currentRound.matches[tournament.currentMatch!];
 
     if (!currentMatch.player2) return false;
-    if (currentMatch.player1.id !== userId && currentMatch.player2.id !== userId) return false;
+    if (currentMatch.completed) return false;
 
-    if (
-      (currentMatch.player1.id === userId && currentMatch.player1.roll !== undefined) ||
-      (currentMatch.player2.id === userId && currentMatch.player2.roll !== undefined)
-    ) return false;
+    const isPlayerOne = currentMatch.player1.id === telegramUserId;
+    const isPlayerTwo = currentMatch.player2.id === telegramUserId;
+    if (!isPlayerOne && !isPlayerTwo) return false;
 
-    await this.bot.sendMessage(chatId, `🎲 ${userName} кидает кубик...`, { message_thread_id: t.messageThreadId });
-    const diceMessage = await this.bot.sendDice(chatId, { emoji: '🎲', message_thread_id: t.messageThreadId });
+    // Игрок уже нажимал кнопку в этом матче — отклоняем повторный клик
+    if (isPlayerOne && this.hasPlayerOneThrownByChatId.get(chatId)) return false;
+    if (isPlayerTwo && this.hasPlayerTwoThrownByChatId.get(chatId)) return false;
 
-    setTimeout(async () => {
-      try {
-        const roll = diceMessage.dice?.value || Math.floor(Math.random() * 6) + 1;
-        if (currentMatch.player1.id === userId) currentMatch.player1.roll = roll;
-        else currentMatch.player2!.roll = roll;
+    // Перестраховка, если значение уже записано
+    if ((isPlayerOne && currentMatch.player1.roll !== undefined) ||
+      (isPlayerTwo && currentMatch.player2!.roll !== undefined)) {
+      return false;
+    }
 
-        if (currentMatch.player1.roll !== undefined && currentMatch.player2!.roll !== undefined) {
-          await this.resolveMatch(chatId);
-        } else {
-          await this.updateTournamentMessage(chatId);
+    // Ставим флаг до любых await — это и блокирует второй клик того же игрока
+    if (isPlayerOne) this.hasPlayerOneThrownByChatId.set(chatId, true);
+    else this.hasPlayerTwoThrownByChatId.set(chatId, true);
+
+    try {
+      await this.telegramBot.sendMessage(chatId, `🎲 ${displayUserName} кидает кубик...`, { message_thread_id: tournament.messageThreadId });
+      const diceMessage = await this.telegramBot.sendDice(chatId, { emoji: '🎲', message_thread_id: tournament.messageThreadId });
+
+      setTimeout(async () => {
+        try {
+          const diceValue = diceMessage.dice?.value ?? (Math.floor(Math.random() * 6) + 1);
+          if (isPlayerOne) currentMatch.player1.roll = diceValue;
+          else currentMatch.player2!.roll = diceValue;
+
+          const bothPlayersRolled = currentMatch.player1.roll !== undefined && currentMatch.player2!.roll !== undefined;
+
+          if (bothPlayersRolled) {
+            await this.resolveMatch(chatId);
+          } else {
+            await this.updateTournamentMessage(chatId);
+          }
+        } catch {
+          // Ошибки в этом окне не откатывают флаг — иначе можно «накликать» повторный бросок.
         }
-      } catch { }
-    }, 4000);
+      }, 4000);
 
-    return true;
+      return true;
+    } catch {
+      // Если вообще не смогли отправить сообщение/кубик — откатываем флаг, чтобы игрок мог повторить
+      if (isPlayerOne) this.hasPlayerOneThrownByChatId.delete(chatId);
+      else this.hasPlayerTwoThrownByChatId.delete(chatId);
+      return false;
+    }
   }
 
   private async resolveMatch(chatId: number) {
-    const t = this.activeTournaments.get(chatId);
-    if (!t || !t.bracket) return;
+    const tournament = this.activeTournamentsByChatId.get(chatId);
+    if (!tournament || !tournament.bracket) return;
 
-    const currentRound = t.bracket.rounds[t.currentRound!];
-    const currentMatch = currentRound.matches[t.currentMatch!];
+    const currentRound = tournament.bracket.rounds[tournament.currentRound!];
+    const currentMatch = currentRound.matches[tournament.currentMatch!];
 
-    const roll1 = currentMatch.player1.roll!;
-    const roll2 = currentMatch.player2!.roll!;
+    const playerOneRoll = currentMatch.player1.roll!;
+    const playerTwoRoll = currentMatch.player2!.roll!;
 
-    if (roll1 === roll2) {
-      await this.bot.sendMessage(
+    if (playerOneRoll === playerTwoRoll) {
+      await this.telegramBot.sendMessage(
         chatId,
-        `🤝 НИЧЬЯ! (${roll1} - ${roll2})\n\n🔄 Начинаем раунд заново!`,
-        { message_thread_id: t.messageThreadId }
+        `🤝 НИЧЬЯ! (${playerOneRoll} - ${playerTwoRoll})\n\n🔄 Начинаем раунд заново!`,
+        { message_thread_id: tournament.messageThreadId }
       );
       currentMatch.player1.roll = undefined;
       currentMatch.player2!.roll = undefined;
-      await promptMatch(this.bot, chatId, t, t.currentMatch! + 1);
+
+      // Снова разрешаем броски обеим участницам
+      this.clearCurrentMatchDiceFlags(chatId);
+
+      await promptMatch(this.telegramBot, chatId, tournament, tournament.currentMatch! + 1);
       return;
     }
 
-    currentMatch.winner = roll1 > roll2 ? currentMatch.player1 : currentMatch.player2!;
+    currentMatch.winner = playerOneRoll > playerTwoRoll ? currentMatch.player1 : currentMatch.player2!;
     currentMatch.completed = true;
 
     await sendMessageWithRetry(
-      this.bot,
+      this.telegramBot,
       chatId,
-      `🏆 ПОБЕДИТЕЛЬ МАТЧА: ${currentMatch.winner.name}!\n\n${currentMatch.player1.name}: ${roll1}\n${currentMatch.player2!.name}: ${roll2}`,
-      { message_thread_id: t.messageThreadId }
+      `🏆 ПОБЕДИТЕЛЬ МАТЧА: ${currentMatch.winner.name}!\n\n${currentMatch.player1.name}: ${playerOneRoll}\n${currentMatch.player2!.name}: ${playerTwoRoll}`,
+      { message_thread_id: tournament.messageThreadId }
     );
+
+    // Матч завершён — очищаем флаги
+    this.clearCurrentMatchDiceFlags(chatId);
 
     setTimeout(() => this.startNextMatch(chatId), 800);
   }
 
-  private async advanceWinnersToNextRound(chatId: number) {
-    const t = this.activeTournaments.get(chatId);
-    if (!t || !t.bracket) return;
+  private clearCurrentMatchDiceFlags(chatId: number): void {
+    this.hasPlayerOneThrownByChatId.delete(chatId);
+    this.hasPlayerTwoThrownByChatId.delete(chatId);
+  }
 
-    if (t.currentRound! >= t.bracket.totalRounds) {
+  private async advanceWinnersToNextRound(chatId: number) {
+    const tournament = this.activeTournamentsByChatId.get(chatId);
+    if (!tournament || !tournament.bracket) return;
+
+    if (tournament.currentRound! >= tournament.bracket.totalRounds) {
       return this.finishTournament(chatId);
     }
 
-    const prevRound = t.bracket.rounds[t.currentRound! - 1];
-    const currentRound = t.bracket.rounds[t.currentRound!];
+    const previousRound = tournament.bracket.rounds[tournament.currentRound! - 1];
+    const currentRound = tournament.bracket.rounds[tournament.currentRound!];
 
-    const winners = collectWinnersOfRound(prevRound);
-    const picked = pickByeIfNeeded(winners, t.bracket, t.currentRound!);
-    if (picked.byePicked) t.bracket.byePlayer = picked.byePicked;
+    const roundWinners = collectWinnersOfRound(previousRound);
+    const byeSelection = pickByeIfNeeded(roundWinners, tournament.bracket, tournament.currentRound!);
+    if (byeSelection.byePicked) tournament.bracket.byePlayer = byeSelection.byePicked;
 
-    let playersToPlace = addByeIfJoiningThisRound(picked.playersToPlace, t.bracket, t.currentRound!);
+    const playersToPlaceThisRound = addByeIfJoiningThisRound(byeSelection.playersToPlace, tournament.bracket, tournament.currentRound!);
 
-    await announceRoundTransition(this.bot, chatId, t);
-    if (t.bracket.byeRound !== undefined && t.currentRound! === t.bracket.byeRound && t.bracket.byePlayer) {
-      await announceByeJoins(this.bot, chatId, t);
+    await announceRoundTransition(this.telegramBot, chatId, tournament);
+    if (tournament.bracket.byeRound !== undefined && tournament.currentRound! === tournament.bracket.byeRound && tournament.bracket.byePlayer) {
+      await announceByeJoins(this.telegramBot, chatId, tournament);
     }
 
-    applyPlayersToRound(currentRound, playersToPlace);
+    applyPlayersToRound(currentRound, playersToPlaceThisRound);
 
-    await sendTournamentBracket(this.bot, chatId, t);
+    await sendTournamentBracket(this.telegramBot, chatId, tournament);
     await this.updateTournamentMessage(chatId);
     setTimeout(() => this.startNextMatch(chatId), 600);
   }
 
   private async finishTournament(chatId: number) {
-    const t = this.activeTournaments.get(chatId);
-    if (!t || !t.bracket) return;
+    const tournament = this.activeTournamentsByChatId.get(chatId);
+    if (!tournament || !tournament.bracket) return;
 
-    const finalRound = t.bracket.rounds[t.bracket.totalRounds - 1];
+    const finalRound = tournament.bracket.rounds[tournament.bracket.totalRounds - 1];
     const finalMatch = finalRound.matches[0];
-    const champion = finalMatch.winner ?? finalMatch.player1;
+    const championPlayer = finalMatch.winner ?? finalMatch.player1;
 
-    t.gameState = 'finished';
+    tournament.gameState = 'finished';
     await this.updateTournamentMessage(chatId);
 
-    let results = `🎉 ТУРНИР ЗАВЕРШЕН! 🎉\n\n👑 ЧЕМПИОН: ${champion.name}! 👑\n\n`;
-    results += '🏆 ФИНАЛЬНАЯ ТУРНИРНАЯ ТАБЛИЦА 🏆\n\n';
-    if (t.bracket.byePlayer && t.bracket.byeRound !== undefined) {
-      results += `🎯 ${t.bracket.byePlayer.name} присоединился в раунде ${t.bracket.byeRound + 1}\n\n`;
+    let resultsText = `🎉 ТУРНИР ЗАВЕРШЕН! 🎉\n\n👑 ЧЕМПИОН: ${championPlayer.name}! 👑\n\n`;
+    resultsText += '🏆 ФИНАЛЬНАЯ ТУРНИРНАЯ ТАБЛИЦА 🏆\n\n';
+    if (tournament.bracket.byePlayer && tournament.bracket.byeRound !== undefined) {
+      resultsText += `🎯 ${tournament.bracket.byePlayer.name} присоединился в раунде ${tournament.bracket.byeRound + 1}\n\n`;
     }
-    results += t.bracket.rounds
-      .map((round, i) => {
-        const lines = round.matches.map(m => {
+    resultsText += tournament.bracket.rounds
+      .map((round, roundIndex) => {
+        const lines = round.matches.map(match => {
           const status = '✅';
-          if (m.player1.name === 'TBD' || (m.player2 && m.player2.name === 'TBD')) return `${status} Ожидание участников`;
-          if (!m.player2) return `${status} ${m.player1.name} (одиночный)` + (m.winner ? ` → 🏆 ${m.winner.name}` : '');
-          return `${status} ${m.player1.name} vs ${m.player2.name}` + (m.winner ? ` → 🏆 ${m.winner.name}` : '');
+          if (match.player1.name === 'TBD' || (match.player2 && match.player2.name === 'TBD')) return `${status} Ожидание участников`;
+          if (!match.player2) return `${status} ${match.player1.name} (одиночный)` + (match.winner ? ` → 🏆 ${match.winner.name}` : '');
+          return `${status} ${match.player1.name} vs ${match.player2.name}` + (match.winner ? ` → 🏆 ${match.winner.name}` : '');
         });
-        return `Раунд ${i + 1}:\n${lines.join('\n')}`;
+        return `Раунд ${roundIndex + 1}:\n${lines.join('\n')}`;
       })
       .join('\n\n');
 
-    await this.bot.sendMessage(chatId, results, { message_thread_id: t.messageThreadId });
+    await this.telegramBot.sendMessage(chatId, resultsText, { message_thread_id: tournament.messageThreadId });
 
     setTimeout(() => {
-      this.activeTournaments.delete(chatId);
+      this.activeTournamentsByChatId.delete(chatId);
     }, 800);
   }
 }
