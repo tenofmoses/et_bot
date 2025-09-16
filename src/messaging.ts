@@ -126,10 +126,21 @@ export async function editMessageWithRetry(
 export function buildBracketText(tournament: Tournament): string {
   if (!tournament.bracket) return '';
   const bracket: TournamentBracket = tournament.bracket;
+
   let txt = '🏆 ТУРНИРНАЯ СЕТКА 🏆\n\n';
 
-  if (bracket.byePlayer && bracket.byeRound !== undefined) {
-    txt += `🎯 ${bracket.byePlayer.name} присоединится в раунде ${bracket.byeRound + 1}\n\n`;
+  // Вывести план/факт «вклеек» bye по раундам (0-based -> +1 для человека)
+  if (Array.isArray(bracket.byeJoinRounds) && bracket.byeJoinRounds.length > 0) {
+    const lines = [...bracket.byeJoinRounds]
+      .sort((a, b) => a - b)
+      .map((joinIdx) => {
+        const p = bracket.byePlayersByJoinRound?.get(joinIdx);
+        const who = p ? p.name : 'Игрок с bye';
+        return `🎯 ${who} присоединится в раунде ${joinIdx + 1}`;
+      });
+    if (lines.length) {
+      txt += lines.join('\n') + '\n\n';
+    }
   }
 
   bracket.rounds.forEach((round: Round, roundIndex: number) => {
@@ -154,6 +165,7 @@ export function buildBracketText(tournament: Tournament): string {
   return txt;
 }
 
+
 /**
  * Генерация «шапки» турнира для закреплённого/главного сообщения.
  * Если турнир в процессе — дополнительно показываем сетку и текущий матч.
@@ -170,9 +182,19 @@ export function buildTournamentHeader(t: Tournament): string {
 
   if (t.gameState === 'playing' && t.bracket) {
     msg += '\n\n🏆 ТУРНИРНАЯ СЕТКА 🏆\n\n';
-    if (t.bracket.byePlayer && t.bracket.byeRound !== undefined) {
-      msg += `🎯 ${t.bracket.byePlayer.name} присоединится в раунде ${t.bracket.byeRound + 1}\n\n`;
+
+    // План/факт «вклеек» bye: если игрок уже определён — показываем имя, иначе «Игрок с bye»
+    if (Array.isArray(t.bracket.byeJoinRounds) && t.bracket.byeJoinRounds.length > 0) {
+      const byeLines = [...t.bracket.byeJoinRounds]
+        .sort((a, b) => a - b)
+        .map((joinIdx) => {
+          const p = t.bracket!.byePlayersByJoinRound?.get(joinIdx);
+          const who = p ? p.name : 'Игрок с bye';
+          return `🎯 ${who} присоединится в раунде ${joinIdx + 1}`;
+        });
+      if (byeLines.length) msg += byeLines.join('\n') + '\n\n';
     }
+
     t.bracket.rounds.forEach((round: Round, roundIndex: number) => {
       msg += `Раунд ${roundIndex + 1}:\n`;
       round.matches.forEach((match: Match) => {
@@ -296,71 +318,6 @@ export async function promptMatch(bot: TelegramBot, chatId: number, t: Tournamen
   );
 
   t.currentPromptMessageId = sent?.message_id;
-}
-
-/**
- * Регистрирует бросок игрока идемпотентно, снимает кнопку с промпта на первый валидный клик
- * и при наличии обоих результатов один раз финализирует матч.
- *
- * Вызывай из обработчика callback 'throw_dice' с userId (Telegram).
- */
-export async function registerDiceRoll(bot: TelegramBot, chatId: number, t: Tournament, userId: number) {
-  if (t.matchFinalized) return;
-  if (t.matchProcessing) return;
-  t.matchProcessing = true;
-
-  try {
-    const cur = safeGetCurrentMatch(t);
-    if (!cur || !cur.match.player2) return;
-
-    const match = cur.match;
-    const isP1 = match.player1?.id === userId;
-    const isP2 = match.player2?.id === userId;
-
-    if (!isP1 && !isP2) return;
-    if ((isP1 && t.p1Rolled) || (isP2 && t.p2Rolled)) return;
-
-    // снять кнопку после первого валидного клика
-    if (t.currentPromptMessageId) {
-      await editMessageWithRetry(
-        bot,
-        chatId,
-        t.currentPromptMessageId,
-        `🎯 МАТЧ ${(t.currentMatch ?? 0) + 1} (Раунд ${(t.currentRound ?? 0) + 1})\n\n${match.player1.name} vs ${match.player2!.name}\n\nИдёт бросок…`,
-        { reply_markup: { inline_keyboard: [] } }
-      );
-      t.currentPromptMessageId = undefined;
-    }
-
-    const roll = 1 + Math.floor(Math.random() * 6);
-    if (isP1) {
-      match.player1.roll = roll;
-      t.p1Rolled = true;
-    } else {
-      match.player2!.roll = roll;
-      t.p2Rolled = true;
-    }
-
-    if (t.p1Rolled && t.p2Rolled && !t.matchFinalized) {
-      t.matchFinalized = true;
-
-      const r1 = match.player1.roll!;
-      const r2 = match.player2!.roll!;
-      match.winner = r1 >= r2 ? match.player1 : match.player2!;
-      match.completed = true;
-
-      await sendMessageWithRetry(
-        bot,
-        chatId,
-        `🏆 ПОБЕДИТЕЛЬ МАТЧА: ${match.winner.name}!\n\n${match.player1.name}: ${r1}\n${match.player2!.name}: ${r2}`,
-        { message_thread_id: t.messageThreadId } as TelegramBot.SendMessageOptions
-      );
-
-      // здесь запускай переход к следующему матчу/раунду
-    }
-  } finally {
-    t.matchProcessing = false;
-  }
 }
 
 /**

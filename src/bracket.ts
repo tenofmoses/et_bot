@@ -3,35 +3,33 @@ import { Match, Player, Round, TournamentBracket } from "./types";
 
 const DEBUG_BRACKET = true;
 
-/**
- * Вспомогательный логгер для отладки построения сетки.
- */
-function log(...args: any[]) {
+/** Вспомогательный логгер для отладки построения сетки. */
+function log(...args: unknown[]) {
   if (DEBUG_BRACKET) {
-    console.debug('[BRACKET]', ...args);
+    console.debug("[BRACKET]", ...args);
   }
 }
 
 /**
  * createTournamentBracket
  * Строит первый раунд с реальными парами и формирует «каркас» последующих раундов с матчами-заглушками.
- * Одиночные матчи в первом раунде сразу помечаются как завершённые, их единственный игрок — победитель.
- * Также вычисляет раунд, в который должен влиться bye-игрок (byeRound), если на входе какого-либо шага остаётся нечётное число участников.
+ * Одиночные матчи в первом раунде сразу считаются выигранными player1.
+ * Если на каком-то шаге остаётся нечётное количество участниц, одна пропускает следующий добавленный раунд
+ * и «вклеивается» через раунд: индекс этого раунда добавляется в byeJoinRounds.
  */
 export function createTournamentBracket(participants: Map<number, string>): TournamentBracket {
-  log('createTournamentBracket: participants =', participants.size);
+  log("createTournamentBracket: participants =", participants.size);
 
   const playerList = Array.from(participants.entries()).map(([id, name]) => ({ id, name }));
 
-  // Перемешиваем участников (Фишер–Йетс), чтобы стартовые пары были случайными.
+  // Перемешиваем (Фишер–Йетс), чтобы пары были случайными.
   for (let i = playerList.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [playerList[i], playerList[j]] = [playerList[j], playerList[i]];
   }
-  log('createTournamentBracket: shuffled players =', playerList.map(p => p.name));
+  log("createTournamentBracket: shuffled players =", playerList.map(p => p.name));
 
-  // Первый раунд: собираем реальные пары. Если не хватает второго — создаём одиночный матч.
-  // Для одиночного матча сразу выставляем winner = player1 и completed = true (автопроход).
+  // Первый раунд: реальные пары; одиночные матчи сразу закрываем автопобедой player1.
   const firstRoundMatches: Match[] = [];
   for (let i = 0; i < playerList.length; i += 2) {
     const p1 = playerList[i];
@@ -47,9 +45,9 @@ export function createTournamentBracket(participants: Map<number, string>): Tour
     } else {
       firstRoundMatches.push({
         player1: { id: p1.id, name: p1.name },
-        player2: null,                 // одиночный матч
-        winner: { id: p1.id, name: p1.name }, // автопобеда
-        completed: true,               // матч сразу закрыт
+        player2: null,
+        winner: { id: p1.id, name: p1.name },
+        completed: true,
       });
       log(`R1: single = ${p1.name} (автопроход оформлен)`);
     }
@@ -58,29 +56,22 @@ export function createTournamentBracket(participants: Map<number, string>): Tour
   const rounds: Round[] = [{ matches: firstRoundMatches }];
 
   /**
-   * Сколько участников идёт дальше после 1-го раунда?
-   * Ровно столько, сколько матчей в первом раунде, потому что у каждого матча один победитель
-   * (для одиночного — уже назначенный победитель).
+   * После 1-го раунда дальше идёт ровно столько участниц, сколько матчей в первом раунде.
+   * На каждом следующем шаге добавляем раунд с floor(remaining/2) матчами.
+   * Если remaining нечётно, одна участница пропускает только что добавленный раунд
+   * и присоединяется к следующему — запоминаем индекс ЭТОГО следующего раунда в byeJoinRounds.
    */
   let remaining = firstRoundMatches.length;
-  log('Skeleton: after R1 remaining =', remaining);
+  const byeJoinRounds: number[] = [];
+  let nextRoundIdx = 1; // индекс добавляемого раунда (0-based в массиве rounds)
 
-  /**
-   * Строим «каркас» следующих раундов.
-   * На каждом шаге добавляем раунд с floor(remaining/2) матчами-заглушками.
-   * Если remaining нечётно, фиксируем, что один участник пропускает текущий раунд,
-   * и должен влиться в следующий — запоминаем индекс этого следующего раунда в byeRound.
-   * После этого считаем, сколько участников останется к следующему шагу:
-   * winners = matchesThisRound (+1, если был пропуск).
-   */
-  let byeRound: number | undefined;
-  let nextRoundIdx = 1; // индекс добавляемого раунда (после первого)
+  log("Skeleton: after R1 remaining =", remaining);
 
   while (remaining > 1) {
     const matchesThisRound = Math.floor(remaining / 2);
     const matches: Match[] = Array.from({ length: matchesThisRound }, () => ({
-      player1: { id: -1, name: 'TBD' },
-      player2: { id: -1, name: 'TBD' },
+      player1: { id: -1, name: "TBD" },
+      player2: { id: -1, name: "TBD" },
       completed: false,
     }));
 
@@ -88,9 +79,12 @@ export function createTournamentBracket(participants: Map<number, string>): Tour
     log(`Skeleton: add round #${nextRoundIdx + 1} with matches =`, matchesThisRound);
 
     if (remaining % 2 === 1) {
-      // Нечётно: одна участница пропускает текущий раунд и «вклеивается» в следующий.
-      byeRound = nextRoundIdx + 1;
-      log(`Skeleton: remaining is odd (${remaining}), byeRound scheduled for round index = ${byeRound}`);
+      // Нечётно: одна участница пропускает ДОБАВЛЕННЫЙ раунд и «вклеится» в СЛЕДУЮЩИЙ.
+      const joinRoundIndex = nextRoundIdx + 1; // 0-based
+      byeJoinRounds.push(joinRoundIndex);
+      log(
+        `Skeleton: remaining is odd (${remaining}), bye will JOIN round index = ${joinRoundIndex}`
+      );
     }
 
     remaining = matchesThisRound + (remaining % 2);
@@ -102,85 +96,101 @@ export function createTournamentBracket(participants: Map<number, string>): Tour
   const bracket: TournamentBracket = {
     rounds,
     totalRounds: rounds.length,
-    byeRound,
-    byePlayer: undefined,
+    byeJoinRounds,
+    byePlayersByJoinRound: new Map<number, Player>(),
   };
 
-  log('createTournamentBracket: totalRounds =', bracket.totalRounds, 'byeRound =', bracket.byeRound);
+  log(
+    "createTournamentBracket: totalRounds =",
+    bracket.totalRounds,
+    "byeJoinRounds =",
+    bracket.byeJoinRounds
+  );
   return bracket;
 }
 
 /**
  * collectWinnersOfRound
- * Возвращает победителей указанного раунда.
- * Если у матча задан winner — используем его.
- * Если матч одиночный (player2 === null) и winner не задан, считаем победителем player1 (на случай, если одиночный матч был создан без автопометки).
- *
- * @param round — раунд, из которого нужно собрать победителей
- * @returns Player[] — массив победителей
+ * Возвращает победительниц указанного раунда.
+ * Если winner указан — берём его; если матч одиночный и winner не указан, считаем победителем player1.
  */
 export function collectWinnersOfRound(round: Round): Player[] {
   const winners: Player[] = [];
   for (const m of round.matches) {
     if (m.winner) {
       winners.push(m.winner);
-      log('collectWinners: winner =', m.winner.name);
+      log("collectWinners: winner =", m.winner.name);
     } else if (m.player2 === null) {
       winners.push(m.player1);
-      log('collectWinners: single auto-advance =', m.player1.name);
+      log("collectWinners: single auto-advance =", m.player1.name);
     } else {
-      log('collectWinners: match has no winner yet');
+      log("collectWinners: match has no winner yet");
     }
   }
-  log('collectWinners: total winners =', winners.length);
+  log("collectWinners: total winners =", winners.length);
   return winners;
 }
 
 /**
  * pickByeIfNeeded
- * В «пред-бай» раунде (индекс = byeRound - 1) при нечётном числе входящих победителей выбирает конкретного участника,
- * который пропустит текущий раунд и присоединится в byeRound. По умолчанию берётся последняя из списка.
- * @returns объект с playersToPlace (участники, которых надо раскладывать по матчам) и byePicked (если была выбрана)
+ * На переходе из currentRoundIndex в currentRoundIndex+1, если число победительниц нечётно
+ * и следующий раунд помечен как раунд «вклейки», выбирает конкретную bye-участника
+ * (по умолчанию последнего) и исключает его из текущей раскладки.
+ *
+ * Возвращает список для раскладки и, при наличии, саму bye-участника с индексом раунда, куда он «вклеится».
  */
 export function pickByeIfNeeded(
-  winners: Player[], // победители текущего раунда перед раскладкой на следующий
-  bracket: TournamentBracket, // турнирная сетка с рассчитанным byeRound
-  currentRoundIndex: number // индекс текущего раунда
-): { playersToPlace: Player[]; byePicked?: Player } {
-  log(`pickByeIfNeeded: winners=${winners.map(w => w.name).join(', ')}, currentRound=${currentRoundIndex}, byeRound=${bracket.byeRound}`);
-
+  winners: Player[],
+  bracket: TournamentBracket,
+  currentRoundIndex: number
+): { playersToPlace: Player[]; byePicked?: Player; joinRoundIndex?: number } {
+  const nextRoundIndex = currentRoundIndex + 1;
   const isOdd = winners.length % 2 === 1;
-  const isPreByeRound = bracket.byeRound !== undefined && currentRoundIndex === bracket.byeRound - 1;
+  const joinPlanned = bracket.byeJoinRounds.includes(nextRoundIndex);
 
-  if (isOdd && isPreByeRound) {
+  log(
+    `pickByeIfNeeded: winners=${winners.map(w => w.name).join(", ")}, currentRound=${currentRoundIndex}, nextRound=${nextRoundIndex}, joinPlanned=${joinPlanned}`
+  );
+
+  if (isOdd && joinPlanned) {
     const byePicked = winners[winners.length - 1];
     const playersToPlace = winners.slice(0, winners.length - 1);
-    log(`pickByeIfNeeded: picked bye = ${byePicked.name}, playersToPlace = ${playersToPlace.map(p => p.name).join(', ')}`);
-    return { playersToPlace, byePicked };
+    log(
+      `pickByeIfNeeded: picked bye = ${byePicked.name}, playersToPlace = ${playersToPlace
+        .map(p => p.name)
+        .join(", ")}; joinRoundIndex=${nextRoundIndex}`
+    );
+    return { playersToPlace, byePicked, joinRoundIndex: nextRoundIndex };
   }
 
-  log('pickByeIfNeeded: no bye picked');
+  log("pickByeIfNeeded: no bye picked");
   return { playersToPlace: winners };
 }
 
 /**
  * addByeIfJoiningThisRound
- * Если текущий раунд совпадает с byeRound, добавляет ранее выбранную bye-участника к списку размещаемых игроков.
- * После использования вызывающий код обычно обнуляет bracket.byePlayer.
- *
- * @returns Player[] — итоговый список участников для раскладки (возможно, с добавленной bye-участника)
+ * Если для currentRoundIndex заранее выбран bye-игрок, добавляет её к списку раскладки.
+ * Удаление записи из карты можно делать снаружи после вызова, когда это удобно.
  */
 export function addByeIfJoiningThisRound(
-  playersToPlace: Player[], // список участников для раскладки по матчам текущего раунда
-  bracket: TournamentBracket, // турнирная сетка (используем byeRound и byePlayer)
-  currentRoundIndex: number // индекс текущего раунда
+  playersToPlace: Player[],
+  bracket: TournamentBracket,
+  currentRoundIndex: number
 ): Player[] {
-  const needJoin = bracket.byeRound !== undefined && currentRoundIndex === bracket.byeRound && !!bracket.byePlayer;
-  log(`addByeIfJoiningThisRound: currentRound=${currentRoundIndex}, byeRound=${bracket.byeRound}, join=${needJoin}`);
+  const bye = bracket.byePlayersByJoinRound.get(currentRoundIndex);
+  const needJoin = !!bye;
+  log(
+    `addByeIfJoiningThisRound: currentRound=${currentRoundIndex}, needJoin=${needJoin}`
+  );
 
-  if (needJoin) {
-    const withBye = [...playersToPlace, bracket.byePlayer!];
-    log('addByeIfJoiningThisRound: added bye =', bracket.byePlayer!.name, '→ playersToPlace =', withBye.map(p => p.name));
+  if (bye) {
+    const withBye = [...playersToPlace, bye];
+    log(
+      "addByeIfJoiningThisRound: added bye =",
+      bye.name,
+      "→ playersToPlace =",
+      withBye.map(p => p.name)
+    );
     return withBye;
   }
 
@@ -189,15 +199,12 @@ export function addByeIfJoiningThisRound(
 
 /**
  * applyPlayersToRound
- * Раскладывает переданных игроков по матчам раунда, сбрасывая служебные поля (roll, winner, completed).
- * Если не хватает второго игрока, формирует одиночный матч и сразу помечает его как завершённый
- * с победителем player1, если player1 задан (не TBD). Если player1 = TBD — оставляет матч открытым.
- *
- * @param round — мутируемый раунд, в который раскладываем игроков
- * @param players — список игроков для раскладки
+ * Раскладывает игроков по матчам текущего раунда.
+ * Сбрасывает служебные поля (roll, winner, completed). Если второго не хватает — одиночный матч.
+ * Для одиночного матча, если player1 не TBD, сразу проставляет winner и completed.
  */
 export function applyPlayersToRound(round: Round, players: Player[]): void {
-  log('applyPlayersToRound: players =', players.map(p => p.name));
+  log("applyPlayersToRound: players =", players.map(p => p.name));
 
   let idx = 0;
   for (let mi = 0; mi < round.matches.length; mi++) {
@@ -208,7 +215,7 @@ export function applyPlayersToRound(round: Round, players: Player[]): void {
     if (p1) {
       match.player1 = { id: p1.id, name: p1.name, roll: undefined };
     } else {
-      match.player1 = { id: -1, name: 'TBD' };
+      match.player1 = { id: -1, name: "TBD" };
     }
 
     if (p2) {
@@ -217,14 +224,14 @@ export function applyPlayersToRound(round: Round, players: Player[]): void {
       match.completed = false;
       log(`applyPlayersToRound: M${mi + 1} = ${match.player1.name} vs ${match.player2.name}`);
     } else {
-      match.player2 = null; // одиночный матч
-      // Автопобеда и автозакрытие, если player1 задан (не TBD).
+      match.player2 = null;
       if (match.player1.id !== -1) {
         match.winner = { id: match.player1.id, name: match.player1.name };
         match.completed = true;
-        log(`applyPlayersToRound: M${mi + 1} single → winner = ${match.player1.name} (автопроход)`);
+        log(
+          `applyPlayersToRound: M${mi + 1} single → winner = ${match.player1.name} (автопроход)`
+        );
       } else {
-        // Если player1 ещё TBD, матч остаётся незавершённым — ждём фактического игрока.
         match.winner = undefined;
         match.completed = false;
         log(`applyPlayersToRound: M${mi + 1} single with TBD → awaiting`);
@@ -233,14 +240,9 @@ export function applyPlayersToRound(round: Round, players: Player[]): void {
   }
 }
 
-/**
- * isRoundCompleted
- * Проверяет, что все матчи раунда помечены как завершённые (completed = true).
- *
- * @returns boolean — true, если каждый матч завершён
- */
+/** isRoundCompleted — все матчи раунда закрыты? */
 export function isRoundCompleted(round: Round): boolean {
   const done = round.matches.every(m => m.completed);
-  log('isRoundCompleted:', done);
+  log("isRoundCompleted:", done);
   return done;
 }

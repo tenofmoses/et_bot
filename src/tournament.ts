@@ -21,11 +21,15 @@ import {
 
 import { Tournament } from './types';
 
+/**
+ * Сервис управления турниром внутри одного чата.
+ * Держит состояние турниров по chatId, реагирует на сообщения и callback-клики,
+ * запускает сетку, проводит матчи и объявляет результаты.
+ */
 export class TournamentService {
   private telegramBot: TelegramBot;
   private activeTournamentsByChatId = new Map<number, Tournament>();
 
-  // Отслеживание, бросали ли уже кубик в текущем матче (по чату)
   private hasPlayerOneThrownByChatId = new Map<number, boolean>();
   private hasPlayerTwoThrownByChatId = new Map<number, boolean>();
 
@@ -41,6 +45,11 @@ export class TournamentService {
     }
   };
 
+  /**
+   * Обработчик callback_query от инлайн-кнопок.
+   * Управляет регистрацией/выходом, стартом/отменой турнира,
+   * а также принимает попытки «бросить кубик».
+   */
   onCallback = async (callbackQuery: TelegramBot.CallbackQuery) => {
     const chatId = callbackQuery.message?.chat.id;
     if (!chatId) return;
@@ -52,67 +61,85 @@ export class TournamentService {
       : callbackQuery.from.first_name || 'Неизвестный';
 
     try {
-      if (callbackData === 'join_tournament') {
-        const tournament = this.activeTournamentsByChatId.get(chatId);
-        if (!tournament) return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир не найден!' });
-        if (tournament.participants.has(telegramUserId)) {
-          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Вы уже участвуете в турнире!' });
+      switch (callbackData) {
+        case 'join_tournament': {
+          const tournament = this.activeTournamentsByChatId.get(chatId);
+          if (!tournament) {
+            return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир не найден!' });
+          }
+          if (tournament.participants.has(telegramUserId)) {
+            return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Вы уже участвуете в турнире!' });
+          }
+
+          tournament.participants.add(telegramUserId);
+          tournament.participantNames.set(telegramUserId, displayUserName);
+          await this.updateTournamentMessage(chatId);
+          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Вы присоединились к турниру!' });
         }
 
-        tournament.participants.add(telegramUserId);
-        tournament.participantNames.set(telegramUserId, displayUserName);
-        await this.updateTournamentMessage(chatId);
-        await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Вы присоединились к турниру!' });
+        case 'leave_tournament': {
+          const tournament = this.activeTournamentsByChatId.get(chatId);
+          if (!tournament || !tournament.participants.has(telegramUserId)) {
+            return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Вы не участвуете в турнире!' });
+          }
+          if (tournament.gameState === 'playing') {
+            return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Нельзя выйти после старта!' });
+          }
 
-      } else if (callbackData === 'leave_tournament') {
-        const tournament = this.activeTournamentsByChatId.get(chatId);
-        if (!tournament || !tournament.participants.has(telegramUserId)) {
-          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Вы не участвуете в турнире!' });
-        }
-        if (tournament.gameState === 'playing') {
-          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Нельзя выйти после старта!' });
-        }
-
-        tournament.participants.delete(telegramUserId);
-        tournament.participantNames.delete(telegramUserId);
-        await this.updateTournamentMessage(chatId);
-        await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Вы вышли из турнира!' });
-
-      } else if (callbackData === 'cancel_tournament') {
-        const tournament = this.activeTournamentsByChatId.get(chatId);
-        if (!tournament) return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир не найден!' });
-        if (tournament.organizerId !== telegramUserId) {
-          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Только организатор может отменить турнир!' });
+          tournament.participants.delete(telegramUserId);
+          tournament.participantNames.delete(telegramUserId);
+          await this.updateTournamentMessage(chatId);
+          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Вы вышли из турнира!' });
         }
 
-        tournament.gameState = 'cancelled';
-        await editMessageWithRetry(this.telegramBot, chatId, tournament.messageId, '🚫 ТУРНИР ОТМЕНЕН\n\nТурнир был отменен.');
-        this.activeTournamentsByChatId.delete(chatId);
-        await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир отменен!' });
+        case 'cancel_tournament': {
+          const tournament = this.activeTournamentsByChatId.get(chatId);
+          if (!tournament) {
+            return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир не найден!' });
+          }
+          if (tournament.organizerId !== telegramUserId) {
+            return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Только организатор может отменить турнир!' });
+          }
 
-      } else if (callbackData === 'start_game') {
-        const tournament = this.activeTournamentsByChatId.get(chatId);
-        if (!tournament || tournament.organizerId !== telegramUserId) {
-          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Только организатор может начать турнир!' });
+          tournament.gameState = 'cancelled';
+          await editMessageWithRetry(this.telegramBot, chatId, tournament.messageId, '🚫 ТУРНИР ОТМЕНЕН\n\nТурнир был отменен.');
+          this.activeTournamentsByChatId.delete(chatId);
+          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир отменен!' });
         }
-        if (tournament.participants.size < 1) {
-          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Нужно минимум 1 участник для начала игры!' });
+
+        case 'start_game': {
+          const tournament = this.activeTournamentsByChatId.get(chatId);
+          if (!tournament || tournament.organizerId !== telegramUserId) {
+            return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Только организатор может начать турнир!' });
+          }
+          if (tournament.participants.size < 1) {
+            return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Нужно минимум 1 участник для начала игры!' });
+          }
+
+          await this.startTournamentBracket(chatId);
+          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир начался!' });
         }
 
-        await this.startTournamentBracket(chatId);
-        await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Турнир начался!' });
+        case 'throw_dice': {
+          const wasAccepted = await this.handleDiceThrow(chatId, telegramUserId, displayUserName);
+          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, {
+            text: wasAccepted ? 'Кубик брошен!' : 'Вы не можете бросить кубик сейчас!',
+          });
+        }
 
-      } else if (callbackData === 'throw_dice') {
-        const wasAccepted = await this.handleDiceThrow(chatId, telegramUserId, displayUserName);
-        await this.telegramBot.answerCallbackQuery(callbackQuery.id, {
-          text: wasAccepted ? 'Кубик брошен!' : 'Вы не можете бросить кубик сейчас!',
-        });
+        default: {
+          return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Неизвестное действие.' });
+        }
       }
     } catch {
       await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Произошла ошибка!' });
     }
   };
 
+
+  /**
+   * Старт регистрации турнира: публикует шапку с кнопками и создаёт пустое состояние.
+   */
   private async startTournament(
     chatId: number,
     telegramUser: TelegramBot.User | undefined,
@@ -164,6 +191,9 @@ export class TournamentService {
     });
   }
 
+  /**
+   * Обновляет «шапку» турнира: текст и состояние инлайн-кнопок в зависимости от стадии.
+   */
   private async updateTournamentMessage(chatId: number) {
     const tournament = this.activeTournamentsByChatId.get(chatId);
     if (!tournament) return;
@@ -193,6 +223,9 @@ export class TournamentService {
     await editMessageWithRetry(this.telegramBot, chatId, tournament.messageId, buildTournamentHeader(tournament), { reply_markup: inlineKeyboard });
   }
 
+  /**
+   * Запускает турнирную сетку: создаёт пары на 1-й раунд и переходит к первому матчу.
+   */
   private async startTournamentBracket(chatId: number) {
     const tournament = this.activeTournamentsByChatId.get(chatId);
     if (!tournament) return;
@@ -206,20 +239,27 @@ export class TournamentService {
     await this.startNextMatch(chatId);
   }
 
+  /**
+   * Переходит к следующему незавершённому матчу или к следующему раунду.
+   * Обрабатывает одиночные матчи (автопроход) и завершение турнира.
+   */
   private async startNextMatch(chatId: number): Promise<void> {
     const tournament = this.activeTournamentsByChatId.get(chatId);
     if (!tournament || !tournament.bracket) return;
 
-    // Очистим флаги для нового матча
+    // Очистим флаги «нажал кнопку броска» для нового матча
     this.clearCurrentMatchDiceFlags(chatId);
 
     const currentRound = tournament.bracket.rounds[tournament.currentRound!];
     const currentMatch = currentRound.matches[tournament.currentMatch!];
 
+    // Если текущий индекс указывает не на активный матч — сдвигаем указатель
     if (!currentMatch || currentMatch.completed) {
       tournament.currentMatch! += 1;
 
+      // Дошли до конца раунда
       if (tournament.currentMatch! >= currentRound.matches.length) {
+        // Если есть незакрытые матчи — прыгаем на первый незакрытый
         if (!isRoundCompleted(currentRound)) {
           const firstIncompleteIndex = currentRound.matches.findIndex(m => !m.completed);
           if (firstIncompleteIndex !== -1) {
@@ -229,20 +269,25 @@ export class TournamentService {
           return;
         }
 
+        // Раунд закрыт — двигаемся дальше
         tournament.currentRound! += 1;
         tournament.currentMatch = 0;
 
+        // Турнир завершён
         if (tournament.currentRound! >= tournament.bracket.totalRounds) {
           return this.finishTournament(chatId);
         }
 
+        // Переносим победителей в следующий раунд
         await this.advanceWinnersToNextRound(chatId);
         return;
       }
 
+      // Рекурсивный шаг на следующий матч
       return this.startNextMatch(chatId);
     }
 
+    // Одиночный матч → автопобеда
     if (!currentMatch.player2) {
       currentMatch.winner = currentMatch.player1;
       currentMatch.completed = true;
@@ -253,9 +298,15 @@ export class TournamentService {
       return;
     }
 
+    // Нормальный матч — публикуем промпт с кнопкой «Кинуть кубик»
     await promptMatch(this.telegramBot, chatId, tournament, tournament.currentMatch! + 1);
   }
 
+  /**
+   * Принимает клик «Кинуть кубик».
+   * Делает клик идемпотентным для той же участницы: флаг ставится до await.
+   * Отправляет анимацию кубика, записывает значение и либо ждёт второго броска, либо завершает матч.
+   */
   private async handleDiceThrow(chatId: number, telegramUserId: number, displayUserName: string): Promise<boolean> {
     const tournament = this.activeTournamentsByChatId.get(chatId);
     if (!tournament || !tournament.bracket) return false;
@@ -288,6 +339,7 @@ export class TournamentService {
       await this.telegramBot.sendMessage(chatId, `🎲 ${displayUserName} кидает кубик...`, { message_thread_id: tournament.messageThreadId });
       const diceMessage = await this.telegramBot.sendDice(chatId, { emoji: '🎲', message_thread_id: tournament.messageThreadId });
 
+      // По факту Telegram отдаёт значение кубика с задержкой — читаем через таймер для эффекта
       setTimeout(async () => {
         try {
           const diceValue = diceMessage.dice?.value ?? (Math.floor(Math.random() * 6) + 1);
@@ -315,6 +367,10 @@ export class TournamentService {
     }
   }
 
+  /**
+   * Завершает матч, когда есть оба броска.
+   * Обрабатывает ничью (сброс и переигровка) или объявляет победителя и двигается дальше.
+   */
   private async resolveMatch(chatId: number) {
     const tournament = this.activeTournamentsByChatId.get(chatId);
     if (!tournament || !tournament.bracket) return;
@@ -357,45 +413,81 @@ export class TournamentService {
     setTimeout(() => this.startNextMatch(chatId), 800);
   }
 
+  /**
+   * Сбрасывает флаги «эти две участницы уже нажимали кнопку» для текущего чата.
+   * Вызывается при старте каждого нового матча и после завершения/ничьей.
+   */
   private clearCurrentMatchDiceFlags(chatId: number): void {
     this.hasPlayerOneThrownByChatId.delete(chatId);
     this.hasPlayerTwoThrownByChatId.delete(chatId);
   }
 
+  /**
+   * Переносит победителей из предыдущего раунда в текущий.
+   * При необходимости выбирает bye-игрока и «вклеивает» его в нужный раунд,
+   * а затем публикует обновлённую сетку и двигается к следующему матчу.
+   */
   private async advanceWinnersToNextRound(chatId: number) {
     const tournament = this.activeTournamentsByChatId.get(chatId);
     if (!tournament || !tournament.bracket) return;
 
+    // Если уже вышли за последний раунд — завершаем турнир
     if (tournament.currentRound! >= tournament.bracket.totalRounds) {
       return this.finishTournament(chatId);
     }
 
-    const previousRound = tournament.bracket.rounds[tournament.currentRound! - 1];
-    const currentRound = tournament.bracket.rounds[tournament.currentRound!];
+    const bracket = tournament.bracket;
+    const prevRoundIndex = tournament.currentRound! - 1;          // индекс раунда, из которого берём победителей
+    const currRoundIndex = tournament.currentRound!;               // индекс раунда, в который раскладываем игроков
 
+    const previousRound = bracket.rounds[prevRoundIndex];
+    const currentRound = bracket.rounds[currRoundIndex];
+
+    // Победители предыдущего раунда
     const roundWinners = collectWinnersOfRound(previousRound);
-    const byeSelection = pickByeIfNeeded(roundWinners, tournament.bracket, tournament.currentRound!);
-    if (byeSelection.byePicked) tournament.bracket.byePlayer = byeSelection.byePicked;
 
-    const playersToPlaceThisRound = addByeIfJoiningThisRound(byeSelection.playersToPlace, tournament.bracket, tournament.currentRound!);
+    // Если число победителей нечётное и для СЛЕДУЮЩЕГО (currRoundIndex) раунда
+    // запланирована «вклейка», выбираем конкретного bye-игрока
+    const byeSelection = pickByeIfNeeded(roundWinners, bracket, prevRoundIndex);
+    if (byeSelection.byePicked && byeSelection.joinRoundIndex !== undefined) {
+      bracket.byePlayersByJoinRound.set(byeSelection.joinRoundIndex, byeSelection.byePicked);
+    }
 
+    // Если в ЭТОТ (currRoundIndex) раунд кто-то должен «вклеиться», добавим его
+    const playersToPlaceThisRound = addByeIfJoiningThisRound(
+      byeSelection.playersToPlace,
+      bracket,
+      currRoundIndex
+    );
+
+    // Сообщения
     await announceRoundTransition(this.telegramBot, chatId, tournament);
-    if (tournament.bracket.byeRound !== undefined && tournament.currentRound! === tournament.bracket.byeRound && tournament.bracket.byePlayer) {
+    if (bracket.byePlayersByJoinRound.has(currRoundIndex)) {
       await announceByeJoins(this.telegramBot, chatId, tournament);
     }
 
+    // Разложить игроков по матчам текущего раунда
     applyPlayersToRound(currentRound, playersToPlaceThisRound);
 
+    // Показать сетку и обновить «шапку»
     await sendTournamentBracket(this.telegramBot, chatId, tournament);
     await this.updateTournamentMessage(chatId);
+
+    // Старт следующего матча с небольшой паузой
     setTimeout(() => this.startNextMatch(chatId), 600);
   }
 
+  /**
+   * Завершает турнир: объявляет чемпиона, выводит финальную таблицу
+   * и очищает состояние турнира для данного чата.
+   */
   private async finishTournament(chatId: number) {
     const tournament = this.activeTournamentsByChatId.get(chatId);
     if (!tournament || !tournament.bracket) return;
 
-    const finalRound = tournament.bracket.rounds[tournament.bracket.totalRounds - 1];
+    const { rounds, totalRounds, byePlayersByJoinRound } = tournament.bracket;
+
+    const finalRound = rounds[totalRounds - 1];
     const finalMatch = finalRound.matches[0];
     const championPlayer = finalMatch.winner ?? finalMatch.player1;
 
@@ -404,15 +496,25 @@ export class TournamentService {
 
     let resultsText = `🎉 ТУРНИР ЗАВЕРШЕН! 🎉\n\n👑 ЧЕМПИОН: ${championPlayer.name}! 👑\n\n`;
     resultsText += '🏆 ФИНАЛЬНАЯ ТУРНИРНАЯ ТАБЛИЦА 🏆\n\n';
-    if (tournament.bracket.byePlayer && tournament.bracket.byeRound !== undefined) {
-      resultsText += `🎯 ${tournament.bracket.byePlayer.name} присоединился в раунде ${tournament.bracket.byeRound + 1}\n\n`;
+
+    // Выведем все фактически состоявшиеся «вклейки» bye в порядке номеров раундов
+    if (byePlayersByJoinRound && byePlayersByJoinRound.size > 0) {
+      const byeLines = Array.from(byePlayersByJoinRound.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([joinRoundIndex, player]) => `🎯 ${player.name} присоединился в раунде ${joinRoundIndex + 1}`);
+      resultsText += byeLines.join('\n') + '\n\n';
     }
-    resultsText += tournament.bracket.rounds
+
+    resultsText += rounds
       .map((round, roundIndex) => {
         const lines = round.matches.map(match => {
           const status = '✅';
-          if (match.player1.name === 'TBD' || (match.player2 && match.player2.name === 'TBD')) return `${status} Ожидание участников`;
-          if (!match.player2) return `${status} ${match.player1.name} (одиночный)` + (match.winner ? ` → 🏆 ${match.winner.name}` : '');
+          if (match.player1.name === 'TBD' || (match.player2 && match.player2.name === 'TBD')) {
+            return `${status} Ожидание участников`;
+          }
+          if (!match.player2) {
+            return `${status} ${match.player1.name} (одиночный)` + (match.winner ? ` → 🏆 ${match.winner.name}` : '');
+          }
           return `${status} ${match.player1.name} vs ${match.player2.name}` + (match.winner ? ` → 🏆 ${match.winner.name}` : '');
         });
         return `Раунд ${roundIndex + 1}:\n${lines.join('\n')}`;
@@ -425,4 +527,5 @@ export class TournamentService {
       this.activeTournamentsByChatId.delete(chatId);
     }, 800);
   }
+
 }
