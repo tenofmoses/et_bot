@@ -11,6 +11,13 @@ export interface Tournament {
   currentMatch?: number;
   gameState?: 'registration' | 'playing' | 'finished' | 'cancelled';
   startTime?: string;
+  // антидубли для текущего матча
+  matchProcessing?: boolean;   // простая "блокировка" на время обработки
+  matchFinalized?: boolean;    // матч уже подведён к итогу
+  p1Rolled?: boolean;
+  p2Rolled?: boolean;
+  // чтобы выключать кнопку после 1-го клика
+  currentPromptMessageId?: number;
 }
 
 export interface TournamentBracket {
