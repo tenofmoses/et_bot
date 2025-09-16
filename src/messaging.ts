@@ -22,7 +22,8 @@ type TelegramApiError = {
 };
 
 function isTelegramApiError(e: unknown): e is TelegramApiError {
-  return typeof e === 'object' && e !== null && ('message' in e || 'response' in e);
+  return !!e && typeof e === 'object' &&
+    ('message' in e || ('response' in e && typeof (e as any).response === 'object'));
 }
 
 /**
@@ -52,12 +53,16 @@ export async function sendMessageWithRetry(
       log('sendMessage failed', { attempt, code, desc });
 
       if (code === 429 && isTelegramApiError(error)) {
-        const retryAfter = error.response?.body?.parameters?.retry_after ?? 5;
-        log(`rate limited: sleep ${retryAfter}s`);
-        await new Promise(res => setTimeout(res, retryAfter * 1000));
+        const retryAfterSec = error.response?.body?.parameters?.retry_after ?? 5;
+        const jitterMs = Math.floor(Math.random() * 500); // +0..500ms
+        const delayMs = retryAfterSec * 1000 + jitterMs;
+        log(`rate limited: sleep ${delayMs}ms (retry_after=${retryAfterSec}s, jitter=${jitterMs}ms)`);
+        await new Promise(res => setTimeout(res, delayMs));
       } else if (attempt < maxRetries) {
-        const delay = Math.pow(2, attempt) * 1000;
-        log(`backoff: sleep ${delay}ms`);
+        // Full Jitter: sleep in [0, base], где base = 2^attempt * 1000
+        const base = Math.pow(2, attempt) * 1000;
+        const delay = Math.floor(Math.random() * base);
+        log(`backoff with jitter: base=${base}ms, sleep ${delay}ms`);
         await new Promise(res => setTimeout(res, delay));
       } else {
         log('sendMessage giving up');
@@ -104,12 +109,15 @@ export async function editMessageWithRetry(
       log('editMessage failed', { attempt, code, desc });
 
       if (code === 429 && isTelegramApiError(error)) {
-        const retryAfter = error.response?.body?.parameters?.retry_after ?? 5;
-        log(`rate limited: sleep ${retryAfter}s`);
-        await new Promise(res => setTimeout(res, retryAfter * 1000));
+        const retryAfterSec = error.response?.body?.parameters?.retry_after ?? 5;
+        const jitterMs = Math.floor(Math.random() * 500); // +0..500ms
+        const delayMs = retryAfterSec * 1000 + jitterMs;
+        log(`rate limited: sleep ${delayMs}ms (retry_after=${retryAfterSec}s, jitter=${jitterMs}ms)`);
+        await new Promise(res => setTimeout(res, delayMs));
       } else if (attempt < maxRetries) {
-        const delay = Math.pow(2, attempt) * 1000;
-        log(`backoff: sleep ${delay}ms`);
+        const base = Math.pow(2, attempt) * 1000;
+        const delay = Math.floor(Math.random() * base); // full jitter
+        log(`backoff with jitter: base=${base}ms, sleep ${delay}ms`);
         await new Promise(res => setTimeout(res, delay));
       } else {
         log('editMessage giving up');
@@ -174,67 +182,92 @@ export function buildTournamentHeader(tournament: Tournament): string {
   const participantsList =
     tournament.participants.size > 0
       ? Array.from(tournament.participantNames.values()).map((name, i) => `${i + 1}. ${name}`).join('\n')
-      : '_Пока никого нет_';
+      : 'Пока никого нет...';
 
   let msg = `🏆 ТУРНИР 🏆\n\n👑 Организатор: ${tournament.organizerName}`;
   if (tournament.startTime) msg += `\n⏰ Время начала: ${tournament.startTime}`;
   msg += `\n\n👥 Участники (${tournament.participants.size}):\n${participantsList}`;
 
-  if (tournament.gameState === 'playing' && tournament.bracket) {
-    msg += '\n\n🏆 ТУРНИРНАЯ СЕТКА 🏆\n\n';
+  // Если турнир ещё не идёт — показываем призыв и выходим
+  if (tournament.gameState !== 'playing' || !tournament.bracket) {
+    return msg + '\n\n🎯 Нажмите кнопку ниже, чтобы присоединиться или выйти!';
+  }
 
-    // План/факт «вклеек» bye: если игрок уже определён — показываем имя, иначе «Игрок с bye»
-    if (Array.isArray(tournament.bracket.byeJoinRounds) && tournament.bracket.byeJoinRounds.length > 0) {
-      const byeLines = [...tournament.bracket.byeJoinRounds]
-        .sort((a, b) => a - b)
-        .map((joinIdx) => {
-          const p = tournament.bracket!.byePlayersByJoinRound?.get(joinIdx);
-          const who = p ? p.name : 'Игрок с bye';
-          return `🎯 ${who} присоединится в раунде ${joinIdx + 1}`;
-        });
-      if (byeLines.length) msg += byeLines.join('\n') + '\n\n';
+  const { bracket } = tournament;
+  msg += `\n\n🏆 ТУРНИРНАЯ СЕТКА 🏆\n\n`;
+
+  // Блок про «вклейки» bye
+  msg += renderByeSummary(bracket);
+
+  // Все раунды
+  for (let roundIndex = 0; roundIndex < bracket.rounds.length; roundIndex++) {
+    const round = bracket.rounds[roundIndex];
+    msg += `Раунд ${roundIndex + 1}:\n`;
+    msg += round.matches.map(renderMatchLine).join('\n');
+    msg += '\n\n';
+  }
+
+  // Текущий матч (если есть валидные индексы)
+  const cur = tournament.currentRound !== undefined &&
+    tournament.currentMatch !== undefined
+    ? safeGetCurrentMatch(tournament)
+    : null;
+
+  if (cur) {
+    const { match, roundIndex } = cur;
+    msg += `🎯 ТЕКУЩИЙ МАТЧ (Раунд ${roundIndex + 1}):\n`;
+    msg += renderMatchLine(match);
+
+    const hasAnyRoll =
+      match.player1.roll !== undefined ||
+      (match.player2 && match.player2.roll !== undefined);
+
+    if (hasAnyRoll) {
+      msg += `\n\n📊 Результаты:\n`;
+      if (match.player1.roll !== undefined) msg += `${match.player1.name}: ${match.player1.roll}\n`;
+      if (match.player2 && match.player2.roll !== undefined) msg += `${match.player2.name}: ${match.player2.roll}\n`;
     }
-
-    tournament.bracket.rounds.forEach((round: Round, roundIndex: number) => {
-      msg += `Раунд ${roundIndex + 1}:\n`;
-      round.matches.forEach((match: Match) => {
-        const status = match.completed ? '✅' : '⏳';
-        if (match.player1.name === 'TBD' || (match.player2 && match.player2.name === 'TBD')) {
-          msg += `${status} Ожидание участников\n`;
-        } else if (!match.player2) {
-          msg += `${status} ${match.player1.name} (одиночный)`;
-          if (match.winner) msg += ` → ${match.winner.name}`;
-          msg += '\n';
-        } else {
-          msg += `${status} ${match.player1.name} vs ${match.player2.name}`;
-          if (match.winner) msg += ` → ${match.winner.name}`;
-          msg += '\n';
-        }
-      });
-      msg += '\n';
-    });
-
-    if (tournament.currentRound !== undefined && tournament.currentMatch !== undefined) {
-      const cur = safeGetCurrentMatch(tournament);
-      if (cur) {
-        const { match, roundIndex } = cur;
-        msg += `🎯 ТЕКУЩИЙ МАТЧ (Раунд ${roundIndex + 1}):\n`;
-        if (!match.player2) msg += `${match.player1.name} (одиночный матч)`;
-        else msg += `${match.player1.name} vs ${match.player2.name}`;
-
-        if (match.player1.roll !== undefined || (match.player2 && match.player2.roll !== undefined)) {
-          msg += '\n\n📊 Результаты:\n';
-          if (match.player1.roll !== undefined) msg += `${match.player1.name}: ${match.player1.roll}\n`;
-          if (match.player2 && match.player2.roll !== undefined) msg += `${match.player2.name}: ${match.player2.roll}\n`;
-        }
-      }
-    }
-  } else {
-    msg += '\n\n🎯 Нажмите кнопку ниже, чтобы присоединиться или выйти!';
   }
 
   return msg;
 }
+
+
+/** Короткий свод по запланированным/назначенным bye-вклейкам. */
+function renderByeSummary(bracket: TournamentBracket): string {
+  if (!Array.isArray(bracket.byeJoinRounds) || bracket.byeJoinRounds.length === 0) return '';
+  const lines = [...bracket.byeJoinRounds]
+    .sort((a, b) => a - b)
+    .map((joinIdx) => {
+      const picked = bracket.byePlayersByJoinRound?.get(joinIdx);
+      const who = picked ? picked.name : 'Кому-то повезет и он';
+      return `🎯 ${who} присоединится в раунде ${joinIdx + 1}`;
+    });
+  return lines.length ? lines.join('\n') + '\n\n' : '';
+}
+
+/** Рендер одной строки матча без вложенных условий. */
+function renderMatchLine(match: Match): string {
+  const status = match.completed ? '✅' : '⏳';
+
+  // Ожидание, если кто-то из игроков ещё TBD
+  const isWaiting =
+    match.player1.name === 'TBD' ||
+    (match.player2 && match.player2.name === 'TBD');
+
+  if (isWaiting) return `${status} Ожидание участников`;
+
+  // Одиночный матч
+  if (!match.player2) {
+    const base = `${status} ${match.player1.name} (одиночный)`;
+    return match.winner ? `${base} → ${match.winner.name}` : base;
+  }
+
+  // Обычный матч
+  const base = `${status} ${match.player1.name} vs ${match.player2.name}`;
+  return match.winner ? `${base} → ${match.winner.name}` : base;
+}
+
 
 /** Отправляем сетку отдельным сообщением (если она есть) */
 export async function sendTournamentBracket(bot: TelegramBot, chatId: number, tournament: Tournament) {

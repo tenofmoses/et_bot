@@ -27,6 +27,12 @@ import { Tournament } from './types';
  * запускает сетку, проводит матчи и объявляет результаты.
  */
 export class TournamentService {
+  private static readonly DICE_ANIMATION_MS = 3500;
+  private static readonly NEXT_MATCH_DELAY_MS = 1000;
+  private static readonly AFTER_RESULT_DELAY_MS = 1000;
+  private static readonly UPDATE_THROTTLE_MS = 900; // на практике 600–1200мс оптимально
+  private pendingHeaderEditTimerByChatId = new Map<number, ReturnType<typeof setTimeout>>();
+
   private telegramBot: TelegramBot;
   private activeTournamentsByChatId = new Map<number, Tournament>();
 
@@ -73,7 +79,7 @@ export class TournamentService {
 
           tournament.participants.add(telegramUserId);
           tournament.participantNames.set(telegramUserId, displayUserName);
-          await this.updateTournamentMessage(chatId);
+          await this.updateTournamentMessageThrottled(chatId);
           return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Вы присоединились к турниру!' });
         }
 
@@ -88,7 +94,7 @@ export class TournamentService {
 
           tournament.participants.delete(telegramUserId);
           tournament.participantNames.delete(telegramUserId);
-          await this.updateTournamentMessage(chatId);
+          await this.updateTournamentMessageThrottled(chatId);
           return await this.telegramBot.answerCallbackQuery(callbackQuery.id, { text: 'Вы вышли из турнира!' });
         }
 
@@ -194,7 +200,7 @@ export class TournamentService {
   /**
    * Обновляет «шапку» турнира: текст и состояние инлайн-кнопок в зависимости от стадии.
    */
-  private async updateTournamentMessage(chatId: number) {
+  private async updateTournamentMessageImmediate(chatId: number) {
     const tournament = this.activeTournamentsByChatId.get(chatId);
     if (!tournament) return;
 
@@ -208,7 +214,12 @@ export class TournamentService {
         { text: '🎲 Начать игру', callback_data: 'start_game' },
         { text: '🚫 Отменить турнир', callback_data: 'cancel_tournament' },
       ]);
-    } else if (tournament.gameState === 'playing' && tournament.bracket && tournament.currentRound !== undefined && tournament.currentMatch !== undefined) {
+    } else if (
+      tournament.gameState === 'playing' &&
+      tournament.bracket &&
+      tournament.currentRound !== undefined &&
+      tournament.currentMatch !== undefined
+    ) {
       const currentMatch = tournament.bracket.rounds[tournament.currentRound].matches[tournament.currentMatch];
       if (!currentMatch.completed && currentMatch.player2) {
         const needPlayerOneRoll = currentMatch.player1.roll === undefined;
@@ -220,8 +231,28 @@ export class TournamentService {
     }
 
     const inlineKeyboard: TelegramBot.InlineKeyboardMarkup = { inline_keyboard: inlineButtons };
-    await editMessageWithRetry(this.telegramBot, chatId, tournament.messageId, buildTournamentHeader(tournament), { reply_markup: inlineKeyboard });
+    await editMessageWithRetry(
+      this.telegramBot,
+      chatId,
+      tournament.messageId,
+      buildTournamentHeader(tournament),
+      { reply_markup: inlineKeyboard }
+    );
   }
+
+  private updateTournamentMessageThrottled(chatId: number): void {
+    const existing = this.pendingHeaderEditTimerByChatId.get(chatId);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      this.pendingHeaderEditTimerByChatId.delete(chatId);
+      // fire-and-forget: нам не важно ждать завершения UI-апдейта
+      this.updateTournamentMessageImmediate(chatId).catch(() => { });
+    }, TournamentService.UPDATE_THROTTLE_MS);
+
+    this.pendingHeaderEditTimerByChatId.set(chatId, timer);
+  }
+
 
   /**
    * Запускает турнирную сетку: создаёт пары на 1-й раунд и переходит к первому матчу.
@@ -235,7 +266,7 @@ export class TournamentService {
     tournament.currentMatch = 0;
     tournament.gameState = 'playing';
 
-    await this.updateTournamentMessage(chatId);
+    await this.updateTournamentMessageThrottled(chatId);
     await this.startNextMatch(chatId);
   }
 
@@ -246,6 +277,7 @@ export class TournamentService {
   private async startNextMatch(chatId: number): Promise<void> {
     const tournament = this.activeTournamentsByChatId.get(chatId);
     if (!tournament || !tournament.bracket) return;
+    tournament.matchFinalized = false;
 
     // Очистим флаги «нажал кнопку броска» для нового матча
     this.clearCurrentMatchDiceFlags(chatId);
@@ -293,8 +325,8 @@ export class TournamentService {
       currentMatch.completed = true;
 
       await announceAutoAdvance(this.telegramBot, chatId, tournament, currentMatch.player1.name);
-      await this.updateTournamentMessage(chatId);
-      setTimeout(() => this.startNextMatch(chatId), 600);
+      await this.updateTournamentMessageThrottled(chatId);
+      setTimeout(() => this.startNextMatch(chatId), TournamentService.NEXT_MATCH_DELAY_MS);
       return;
     }
 
@@ -311,8 +343,11 @@ export class TournamentService {
     const tournament = this.activeTournamentsByChatId.get(chatId);
     if (!tournament || !tournament.bracket) return false;
 
-    const currentRound = tournament.bracket.rounds[tournament.currentRound!];
-    const currentMatch = currentRound.matches[tournament.currentMatch!];
+    const roundIdxAtClick = tournament.currentRound!;
+    const matchIdxAtClick = tournament.currentMatch!;
+    const currentRound = tournament.bracket.rounds[roundIdxAtClick];
+    const currentMatch = currentRound?.matches[matchIdxAtClick];
+    if (!currentMatch) return false;
 
     if (!currentMatch.player2) return false;
     if (currentMatch.completed) return false;
@@ -331,7 +366,7 @@ export class TournamentService {
       return false;
     }
 
-    // Ставим флаг до любых await — это и блокирует второй клик того же игрока
+    // Ставим флаг до await — блокируем двойной клик одного игрока
     if (isPlayerOne) this.hasPlayerOneThrownByChatId.set(chatId, true);
     else this.hasPlayerTwoThrownByChatId.set(chatId, true);
 
@@ -342,25 +377,33 @@ export class TournamentService {
       // По факту Telegram отдаёт значение кубика с задержкой — читаем через таймер для эффекта
       setTimeout(async () => {
         try {
+          // Если матч уже сменился/закрылся — игнорируем просроченный таймер
+          const t = this.activeTournamentsByChatId.get(chatId);
+          if (!t || !t.bracket) return;
+          if (t.currentRound !== roundIdxAtClick || t.currentMatch !== matchIdxAtClick) return;
+
+          const roundNow = t.bracket.rounds[roundIdxAtClick];
+          const matchNow = roundNow?.matches[matchIdxAtClick];
+          if (!matchNow || matchNow.completed) return;
+
           const diceValue = diceMessage.dice?.value ?? (Math.floor(Math.random() * 6) + 1);
-          if (isPlayerOne) currentMatch.player1.roll = diceValue;
-          else currentMatch.player2!.roll = diceValue;
+          if (isPlayerOne) matchNow.player1.roll = diceValue;
+          else matchNow.player2!.roll = diceValue;
 
-          const bothPlayersRolled = currentMatch.player1.roll !== undefined && currentMatch.player2!.roll !== undefined;
-
+          const bothPlayersRolled = matchNow.player1.roll !== undefined && matchNow.player2!.roll !== undefined;
           if (bothPlayersRolled) {
-            await this.resolveMatch(chatId);
+            await this.tryResolveCurrentMatch(chatId, roundIdxAtClick, matchIdxAtClick);
           } else {
-            await this.updateTournamentMessage(chatId);
+            await this.updateTournamentMessageThrottled(chatId);
           }
         } catch {
-          // Ошибки в этом окне не откатывают флаг — иначе можно «накликать» повторный бросок.
+          // Ошибки в таймере игнорируем — флаги не откатываем, чтобы не было двойных бросков.
         }
-      }, 4000);
+      }, TournamentService.DICE_ANIMATION_MS);
 
       return true;
     } catch {
-      // Если вообще не смогли отправить сообщение/кубик — откатываем флаг, чтобы игрок мог повторить
+      // Если не отправили — откатываем флаг, чтобы игрок мог повторить
       if (isPlayerOne) this.hasPlayerOneThrownByChatId.delete(chatId);
       else this.hasPlayerTwoThrownByChatId.delete(chatId);
       return false;
@@ -371,46 +414,70 @@ export class TournamentService {
    * Завершает матч, когда есть оба броска.
    * Обрабатывает ничью (сброс и переигровка) или объявляет победителя и двигается дальше.
    */
-  private async resolveMatch(chatId: number) {
+  private async tryResolveCurrentMatch(chatId: number, roundIdx: number, matchIdx: number) {
     const tournament = this.activeTournamentsByChatId.get(chatId);
     if (!tournament || !tournament.bracket) return;
 
-    const currentRound = tournament.bracket.rounds[tournament.currentRound!];
-    const currentMatch = currentRound.matches[tournament.currentMatch!];
+    // Проверяем, что речь всё ещё о том же матче
+    if (tournament.currentRound !== roundIdx || tournament.currentMatch !== matchIdx) return;
 
-    const playerOneRoll = currentMatch.player1.roll!;
-    const playerTwoRoll = currentMatch.player2!.roll!;
+    const round = tournament.bracket.rounds[roundIdx];
+    const match = round.matches[matchIdx];
 
-    if (playerOneRoll === playerTwoRoll) {
-      await this.telegramBot.sendMessage(
+    // Уже финализирован кем-то ещё? — выходим
+    if (tournament.matchFinalized || match.completed) return;
+
+    // «Замок» на время подведения итогов
+    tournament.matchFinalized = true;
+
+    try {
+      const r1 = match.player1.roll;
+      const r2 = match.player2?.roll;
+      if (r1 === undefined || r2 === undefined) {
+        // Не оба бросили — снимаем «замок», ждём
+        tournament.matchFinalized = false;
+        return;
+      }
+
+      if (r1 === r2) {
+        await this.telegramBot.sendMessage(
+          chatId,
+          `🤝 НИЧЬЯ! (${r1} - ${r2})\n\n🔄 Бросаем заново!`,
+          { message_thread_id: tournament.messageThreadId }
+        );
+
+        // Сброс значений и флагов — разрешаем снова кликать
+        match.player1.roll = undefined;
+        match.player2!.roll = undefined;
+        this.clearCurrentMatchDiceFlags(chatId);
+
+        // Этот матч ещё НЕ финализирован (повторная попытка)
+        tournament.matchFinalized = false;
+
+        await promptMatch(this.telegramBot, chatId, tournament, matchIdx + 1);
+        return;
+      }
+
+      match.winner = r1 > r2 ? match.player1 : match.player2!;
+      match.completed = true;
+
+      await sendMessageWithRetry(
+        this.telegramBot,
         chatId,
-        `🤝 НИЧЬЯ! (${playerOneRoll} - ${playerTwoRoll})\n\n🔄 Начинаем раунд заново!`,
+        `🏆 ПОБЕДИТЕЛЬ МАТЧА: ${match.winner.name}!\n\n${match.player1.name}: ${r1}\n${match.player2!.name}: ${r2}`,
         { message_thread_id: tournament.messageThreadId }
       );
-      currentMatch.player1.roll = undefined;
-      currentMatch.player2!.roll = undefined;
 
-      // Снова разрешаем броски обеим участницам
       this.clearCurrentMatchDiceFlags(chatId);
 
-      await promptMatch(this.telegramBot, chatId, tournament, tournament.currentMatch! + 1);
-      return;
+      setTimeout(() => this.startNextMatch(chatId), TournamentService.AFTER_RESULT_DELAY_MS);
+    } finally {
+      // На случай исключений не оставляем вечный «замок»,
+      // но если матч завершён — это уже не важно.
+      if (!match.completed) {
+        tournament.matchFinalized = false;
+      }
     }
-
-    currentMatch.winner = playerOneRoll > playerTwoRoll ? currentMatch.player1 : currentMatch.player2!;
-    currentMatch.completed = true;
-
-    await sendMessageWithRetry(
-      this.telegramBot,
-      chatId,
-      `🏆 ПОБЕДИТЕЛЬ МАТЧА: ${currentMatch.winner.name}!\n\n${currentMatch.player1.name}: ${playerOneRoll}\n${currentMatch.player2!.name}: ${playerTwoRoll}`,
-      { message_thread_id: tournament.messageThreadId }
-    );
-
-    // Матч завершён — очищаем флаги
-    this.clearCurrentMatchDiceFlags(chatId);
-
-    setTimeout(() => this.startNextMatch(chatId), 800);
   }
 
   /**
@@ -472,7 +539,7 @@ export class TournamentService {
     applyPlayersToRound(currentRound, playersToPlace);
 
     await sendTournamentBracket(this.telegramBot, chatId, tournament);
-    await this.updateTournamentMessage(chatId);
+    await this.updateTournamentMessageThrottled(chatId);
     setTimeout(() => this.startNextMatch(chatId), 600);
   }
 
@@ -491,7 +558,7 @@ export class TournamentService {
     const championPlayer = finalMatch.winner ?? finalMatch.player1;
 
     tournament.gameState = 'finished';
-    await this.updateTournamentMessage(chatId);
+    await this.updateTournamentMessageThrottled(chatId);
 
     let resultsText = `🎉 ТУРНИР ЗАВЕРШЕН! 🎉\n\n👑 ЧЕМПИОН: ${championPlayer.name}! 👑\n\n`;
     resultsText += '🏆 ФИНАЛЬНАЯ ТУРНИРНАЯ ТАБЛИЦА 🏆\n\n';
