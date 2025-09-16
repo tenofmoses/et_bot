@@ -22,7 +22,7 @@ export function createTournamentBracket(participants: Map<number, string>): Tour
 
   const playerList = Array.from(participants.entries()).map(([id, name]) => ({ id, name }));
 
-  // Перемешиваем (Фишер–Йетс), чтобы пары были случайными.
+  // Перемешиваем, чтобы пары были случайными.
   for (let i = playerList.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [playerList[i], playerList[j]] = [playerList[j], playerList[i]];
@@ -56,9 +56,9 @@ export function createTournamentBracket(participants: Map<number, string>): Tour
   const rounds: Round[] = [{ matches: firstRoundMatches }];
 
   /**
-   * После 1-го раунда дальше идёт ровно столько участниц, сколько матчей в первом раунде.
+   * После 1-го раунда дальше идёт ровно столько участников, сколько матчей в первом раунде.
    * На каждом следующем шаге добавляем раунд с floor(remaining/2) матчами.
-   * Если remaining нечётно, одна участница пропускает только что добавленный раунд
+   * Если remaining нечётно, один участник пропускает только что добавленный раунд
    * и присоединяется к следующему — запоминаем индекс ЭТОГО следующего раунда в byeJoinRounds.
    */
   let remaining = firstRoundMatches.length;
@@ -79,7 +79,7 @@ export function createTournamentBracket(participants: Map<number, string>): Tour
     log(`Skeleton: add round #${nextRoundIdx + 1} with matches =`, matchesThisRound);
 
     if (remaining % 2 === 1) {
-      // Нечётно: одна участница пропускает ДОБАВЛЕННЫЙ раунд и «вклеится» в СЛЕДУЮЩИЙ.
+      // Нечётно: один участник пропускает ДОБАВЛЕННЫЙ раунд и «вклеится» в СЛЕДУЮЩИЙ.
       const joinRoundIndex = nextRoundIdx + 1; // 0-based
       byeJoinRounds.push(joinRoundIndex);
       log(
@@ -111,7 +111,7 @@ export function createTournamentBracket(participants: Map<number, string>): Tour
 
 /**
  * collectWinnersOfRound
- * Возвращает победительниц указанного раунда.
+ * Возвращает победителей указанного раунда.
  * Если winner указан — берём его; если матч одиночный и winner не указан, считаем победителем player1.
  */
 export function collectWinnersOfRound(round: Round): Player[] {
@@ -133,7 +133,7 @@ export function collectWinnersOfRound(round: Round): Player[] {
 
 /**
  * addByeIfJoiningThisRound
- * Если для currentRoundIndex заранее выбран bye-игрок, добавляет её к списку раскладки.
+ * Если для currentRoundIndex заранее выбран bye-игрок, добавляет его к списку раскладки.
  * Удаление записи из карты можно делать снаружи после вызова, когда это удобно.
  */
 export function addByeIfJoiningThisRound(
