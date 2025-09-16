@@ -170,32 +170,32 @@ export function buildBracketText(tournament: Tournament): string {
  * Генерация «шапки» турнира для закреплённого/главного сообщения.
  * Если турнир в процессе — дополнительно показываем сетку и текущий матч.
  */
-export function buildTournamentHeader(t: Tournament): string {
+export function buildTournamentHeader(tournament: Tournament): string {
   const participantsList =
-    t.participants.size > 0
-      ? Array.from(t.participantNames.values()).map((name, i) => `${i + 1}. ${name}`).join('\n')
+    tournament.participants.size > 0
+      ? Array.from(tournament.participantNames.values()).map((name, i) => `${i + 1}. ${name}`).join('\n')
       : '_Пока никого нет_';
 
-  let msg = `🏆 ТУРНИР 🏆\n\n👑 Организатор: ${t.organizerName}`;
-  if (t.startTime) msg += `\n⏰ Время начала: ${t.startTime}`;
-  msg += `\n\n👥 Участники (${t.participants.size}):\n${participantsList}`;
+  let msg = `🏆 ТУРНИР 🏆\n\n👑 Организатор: ${tournament.organizerName}`;
+  if (tournament.startTime) msg += `\n⏰ Время начала: ${tournament.startTime}`;
+  msg += `\n\n👥 Участники (${tournament.participants.size}):\n${participantsList}`;
 
-  if (t.gameState === 'playing' && t.bracket) {
+  if (tournament.gameState === 'playing' && tournament.bracket) {
     msg += '\n\n🏆 ТУРНИРНАЯ СЕТКА 🏆\n\n';
 
     // План/факт «вклеек» bye: если игрок уже определён — показываем имя, иначе «Игрок с bye»
-    if (Array.isArray(t.bracket.byeJoinRounds) && t.bracket.byeJoinRounds.length > 0) {
-      const byeLines = [...t.bracket.byeJoinRounds]
+    if (Array.isArray(tournament.bracket.byeJoinRounds) && tournament.bracket.byeJoinRounds.length > 0) {
+      const byeLines = [...tournament.bracket.byeJoinRounds]
         .sort((a, b) => a - b)
         .map((joinIdx) => {
-          const p = t.bracket!.byePlayersByJoinRound?.get(joinIdx);
+          const p = tournament.bracket!.byePlayersByJoinRound?.get(joinIdx);
           const who = p ? p.name : 'Игрок с bye';
           return `🎯 ${who} присоединится в раунде ${joinIdx + 1}`;
         });
       if (byeLines.length) msg += byeLines.join('\n') + '\n\n';
     }
 
-    t.bracket.rounds.forEach((round: Round, roundIndex: number) => {
+    tournament.bracket.rounds.forEach((round: Round, roundIndex: number) => {
       msg += `Раунд ${roundIndex + 1}:\n`;
       round.matches.forEach((match: Match) => {
         const status = match.completed ? '✅' : '⏳';
@@ -214,8 +214,8 @@ export function buildTournamentHeader(t: Tournament): string {
       msg += '\n';
     });
 
-    if (t.currentRound !== undefined && t.currentMatch !== undefined) {
-      const cur = safeGetCurrentMatch(t);
+    if (tournament.currentRound !== undefined && tournament.currentMatch !== undefined) {
+      const cur = safeGetCurrentMatch(tournament);
       if (cur) {
         const { match, roundIndex } = cur;
         msg += `🎯 ТЕКУЩИЙ МАТЧ (Раунд ${roundIndex + 1}):\n`;
@@ -237,8 +237,8 @@ export function buildTournamentHeader(t: Tournament): string {
 }
 
 /** Отправляем сетку отдельным сообщением (если она есть) */
-export async function sendTournamentBracket(bot: TelegramBot, chatId: number, t: Tournament) {
-  const text = buildBracketText(t);
+export async function sendTournamentBracket(bot: TelegramBot, chatId: number, tournament: Tournament) {
+  const text = buildBracketText(tournament);
   if (!text) {
     log('sendTournamentBracket: no bracket text, skip');
     return;
@@ -248,38 +248,38 @@ export async function sendTournamentBracket(bot: TelegramBot, chatId: number, t:
     bot,
     chatId,
     text,
-    { message_thread_id: t.messageThreadId } as TelegramBot.SendMessageOptions
+    { message_thread_id: tournament.messageThreadId } as TelegramBot.SendMessageOptions
   );
 }
 
 /** Служебные уведомления — переход/вклейка/автопроход */
-export async function announceRoundTransition(bot: TelegramBot, chatId: number, t: Tournament) {
-  log('announceRoundTransition:', { nextRound: (t.currentRound ?? 0) + 1 });
+export async function announceRoundTransition(bot: TelegramBot, chatId: number, tournament: Tournament) {
+  log('announceRoundTransition:', { nextRound: (tournament.currentRound ?? 0) + 1 });
   await sendMessageWithRetry(
     bot,
     chatId,
-    `🔄 ПЕРЕХОД К РАУНДУ ${(t.currentRound ?? 0) + 1}`,
-    { message_thread_id: t.messageThreadId } as TelegramBot.SendMessageOptions
+    `🔄 ПЕРЕХОД К РАУНДУ ${(tournament.currentRound ?? 0) + 1}`,
+    { message_thread_id: tournament.messageThreadId } as TelegramBot.SendMessageOptions
   );
 }
 
-export async function announceByeJoins(bot: TelegramBot, chatId: number, t: Tournament) {
+export async function announceByeJoins(bot: TelegramBot, chatId: number, tournament: Tournament) {
   log('announceByeJoins');
   await sendMessageWithRetry(
     bot,
     chatId,
     `🎯 Игрок с bye присоединяется к этому раунду`,
-    { message_thread_id: t.messageThreadId } as TelegramBot.SendMessageOptions
+    { message_thread_id: tournament.messageThreadId } as TelegramBot.SendMessageOptions
   );
 }
 
-export async function announceAutoAdvance(bot: TelegramBot, chatId: number, t: Tournament, playerName: string) {
+export async function announceAutoAdvance(bot: TelegramBot, chatId: number, tournament: Tournament, playerName: string) {
   log('announceAutoAdvance:', playerName);
   await sendMessageWithRetry(
     bot,
     chatId,
     `🎯 ${playerName} проходит дальше (одиночный матч).`,
-    { message_thread_id: t.messageThreadId } as TelegramBot.SendMessageOptions
+    { message_thread_id: tournament.messageThreadId } as TelegramBot.SendMessageOptions
   );
 }
 
@@ -287,19 +287,19 @@ export async function announceAutoAdvance(bot: TelegramBot, chatId: number, t: T
  * Промпт текущего матча: выводит текст и кнопку «Кинуть кубик».
  * Сбрасывает антидубли-флаги и запоминает id сообщения промпта.
  */
-export async function promptMatch(bot: TelegramBot, chatId: number, t: Tournament, matchNumber: number) {
-  const cur = safeGetCurrentMatch(t);
+export async function promptMatch(bot: TelegramBot, chatId: number, tournament: Tournament, matchNumber: number) {
+  const cur = safeGetCurrentMatch(tournament);
   if (!cur || !cur.match.player2) {
     log('promptMatch: no current match or single match — skip prompt');
     return;
   }
 
   // сброс флагов для идемпотентности
-  t.matchProcessing = false;
-  t.matchFinalized = false;
-  t.p1Rolled = false;
-  t.p2Rolled = false;
-  t.currentPromptMessageId = undefined;
+  tournament.matchProcessing = false;
+  tournament.matchFinalized = false;
+  tournament.p1Rolled = false;
+  tournament.p2Rolled = false;
+  tournament.currentPromptMessageId = undefined;
 
   const text = `🎯 МАТЧ ${matchNumber} (Раунд ${cur.roundIndex + 1})\n\n${cur.match.player1.name} vs ${cur.match.player2!.name}\n\nВы должны бросить кубик!`;
   const keyboard: TelegramBot.InlineKeyboardMarkup = {
@@ -313,11 +313,11 @@ export async function promptMatch(bot: TelegramBot, chatId: number, t: Tournamen
     text,
     {
       reply_markup: keyboard,
-      message_thread_id: t.messageThreadId,
+      message_thread_id: tournament.messageThreadId,
     } as TelegramBot.SendMessageOptions
   );
 
-  t.currentPromptMessageId = sent?.message_id;
+  tournament.currentPromptMessageId = sent?.message_id;
 }
 
 /**
@@ -325,11 +325,11 @@ export async function promptMatch(bot: TelegramBot, chatId: number, t: Tournamen
  * Возвращает null, если индексы «уехали».
  */
 export function safeGetCurrentMatch(
-  t: Tournament
+  tournament: Tournament
 ): { round: Round; match: Match; roundIndex: number; matchIndex: number } | null {
-  const bracket = t.bracket;
-  const rIdx = t.currentRound;
-  const mIdx = t.currentMatch;
+  const bracket = tournament.bracket;
+  const rIdx = tournament.currentRound;
+  const mIdx = tournament.currentMatch;
   if (!bracket || rIdx == null || mIdx == null) return null;
   if (rIdx < 0 || rIdx >= bracket.totalRounds) return null;
 

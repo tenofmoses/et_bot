@@ -180,8 +180,9 @@ export function pickByeConsideringEntrants(
   );
 
   if (entrants.length % 2 === 1 && joinPlannedNext) {
-    const byePicked = entrants[entrants.length - 1]; // стратегия выбора — последняя
-    const playersToPlace = entrants.slice(0, -1);
+    const rndIndex = Math.floor(Math.random() * entrants.length);
+    const byePicked = entrants[rndIndex];
+    const playersToPlace = entrants.slice(0, rndIndex).concat(entrants.slice(rndIndex + 1));
     log(
       `pickByeConsideringEntrants: picked bye = ${byePicked.name}, playersToPlace = ${playersToPlace
         .map(p => p.name)
